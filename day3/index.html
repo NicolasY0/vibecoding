@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>国际象棋 · Classic Chess</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+  <!-- Board column -->
+  <div class="board-col">
+    <!-- Black's clock (top) -->
+    <div class="clock-panel" id="clock-black-panel">
+      <span class="clock-label">♚ 黑方</span>
+      <span class="clock-time" id="clock-black">10:00</span>
+    </div>
+
+    <div class="board-container">
+      <canvas id="chess-canvas"></canvas>
+    </div>
+
+    <!-- White's clock (bottom) -->
+    <div class="clock-panel" id="clock-white-panel">
+      <span class="clock-label">♔ 白方</span>
+      <span class="clock-time" id="clock-white">10:00</span>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-bar">
+      <select id="mode-select">
+        <option value="pvp">👤 vs 👤 人人</option>
+        <option value="pvai">👤 vs 🤖 人机</option>
+      </select>
+
+      <div id="difficulty-group" style="display:none">
+        <select id="difficulty-select">
+          <option value="easy">🟢 简单</option>
+          <option value="medium" selected>🟡 中等</option>
+          <option value="hard">🔴 困难</option>
+        </select>
+      </div>
+
+      <select id="time-control">
+        <option value="1+0">1+0 超快棋</option>
+        <option value="3+0">3+0 快棋</option>
+        <option value="3+2">3+2</option>
+        <option value="5+3">5+3</option>
+        <option value="10+0" selected>10+0</option>
+        <option value="10+5">10+5</option>
+        <option value="15+10">15+10</option>
+        <option value="30+0">30+0</option>
+      </select>
+
+      <button class="btn btn-primary" id="btn-new-game">🔄 新游戏</button>
+      <button class="btn" id="btn-undo" disabled>↩ 悔棋</button>
+      <button class="btn btn-gold" id="btn-flip">🔃 翻转</button>
+      <button class="btn btn-danger" id="btn-resign">🏳 认输</button>
+
+      <label class="clock-toggle" id="clock-toggle-label">
+        <input type="checkbox" id="clock-enabled" checked>
+        <span>⏱ 计时</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div class="side-col">
+    <!-- Turn indicator -->
+    <div class="panel turn-display">
+      <div id="turn-indicator">♔ 白方回合</div>
+      <div id="status-text">你的回合</div>
+    </div>
+
+    <!-- Captured pieces -->
+    <div class="panel">
+      <div class="panel-title">♔ 白方吃子</div>
+      <div class="captured-pieces" id="captured-black">—</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">♚ 黑方吃子</div>
+      <div class="captured-pieces" id="captured-white">—</div>
+    </div>
+
+    <!-- Move history -->
+    <div class="panel">
+      <div class="panel-title">📜 走法记录</div>
+      <div class="move-history" id="move-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Game over modal -->
+<div class="game-over-overlay" id="game-over-modal">
+  <div class="game-over-dialog">
+    <h2>🏆 游戏结束</h2>
+    <p id="game-over-text"></p>
+    <button class="btn btn-primary" id="btn-play-again">🔄 再来一局</button>
+  </div>
+</div>
+
+<script src="js/chess.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

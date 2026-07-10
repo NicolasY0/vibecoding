@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记笔记 · 时间标记</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #242424;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #4da6ff;
+    --accent-glow: rgba(77, 166, 255, 0.25);
+    --danger: #e05555;
+    --mark: #f0b040;
+    --font: 'Inter', 'Segoe UI', 'Noto Sans SC', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+
+  .app {
+    max-width: 520px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+  .header p {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* ── Timer Display ── */
+  .timer-card {
+    background: var(--surface);
+    border: 1px solid #2a2a2a;
+    border-radius: 16px;
+    padding: 32px 24px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .timer-card.recording {
+    border-color: var(--accent);
+    box-shadow: 0 0 32px var(--accent-glow);
+  }
+  .timer-card.recording::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: conic-gradient(from 0deg, transparent, var(--accent-glow), transparent);
+    animation: rotate 3s linear infinite;
+    opacity: 0.4;
+    z-index: 0;
+  }
+  @keyframes rotate { to { transform: rotate(360deg); } }
+
+  .timer-card > * { position: relative; z-index: 1; }
+
+  .elapsed {
+    font-family: var(--mono);
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .elapsed.stopped { color: var(--text-dim); }
+
+  .current-time {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  .recording-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--danger);
+    margin-right: 6px;
+    animation: blink 0.8s ease-in-out infinite;
+  }
+  @keyframes blink { 50% { opacity: 0.2; } }
+
+  /* ── Buttons ── */
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  .btn {
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 600;
+    padding: 12px 24px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .btn:active { transform: scale(0.96); }
+
+  .btn-start {
+    background: var(--accent);
+    color: #fff;
+    min-width: 120px;
+    justify-content: center;
+  }
+  .btn-start:hover { filter: brightness(1.15); }
+
+  .btn-mark {
+    background: var(--surface2);
+    color: var(--mark);
+    border-color: #3a3a3a;
+  }
+  .btn-mark:hover { border-color: var(--mark); background: #2a2818; }
+  .btn-mark:disabled { opacity: 0.25; cursor: not-allowed; }
+
+  .btn-reset {
+    background: transparent;
+    color: var(--text-dim);
+    border-color: #333;
+    font-size: 12px;
+    padding: 8px 16px;
+  }
+  .btn-reset:hover { color: var(--text); border-color: #555; }
+
+  /* ── Note input ── */
+  .note-input-row {
+    display: flex;
+    gap: 8px;
+  }
+  .note-input-row input {
+    flex: 1;
+    font-family: var(--font);
+    font-size: 14px;
+    padding: 11px 14px;
+    background: var(--surface);
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .note-input-row input:focus { border-color: var(--accent); }
+  .note-input-row input::placeholder { color: #555; }
+
+  .btn-add-note {
+    background: var(--surface2);
+    color: var(--text);
+    border-color: #3a3a3a;
+    padding: 11px 16px;
+    white-space: nowrap;
+  }
+  .btn-add-note:hover { border-color: var(--accent); }
+
+  /* ── Marks List ── */
+  .marks-section h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    font-weight: 500;
+  }
+
+  .marks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mark-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid #222;
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+  .mark-item:hover { background: var(--surface2); }
+
+  .mark-item .index {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 22px;
+  }
+
+  .mark-item .mark-time {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--mark);
+    min-width: 70px;
+    font-weight: 500;
+  }
+
+  .mark-item .mark-delta {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 60px;
+  }
+
+  .mark-item .mark-note {
+    flex: 1;
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .mark-item .mark-clock {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #555;
+    min-width: 48px;
+    text-align: right;
+  }
+
+  .mark-item .btn-delete {
+    background: none;
+    border: none;
+    color: #444;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s;
+  }
+  .mark-item .btn-delete:hover { color: var(--danger); }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #444;
+    font-size: 14px;
+  }
+  .empty-state .icon { font-size: 36px; margin-bottom: 8px; }
+
+  /* ── Stats bar ── */
+  .stats-bar {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .stats-bar span {
+    background: var(--surface);
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid #222;
+  }
+  .stats-bar .val { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>⏱ 时间标记笔记</h1>
+    <p>开始记录 → 随时标记 → 查看所有时间点</p>
+  </div>
+
+  <!-- Timer -->
+  <div class="timer-card" id="timer-card">
+    <div class="elapsed stopped" id="elapsed">00:00:00</div>
+    <div class="current-time" id="current-time">—</div>
+  </div>
+
+  <!-- Controls -->
+  <div class="btn-row">
+    <button class="btn btn-start" id="btn-start" title="开始 / 暂停记录">
+      <span id="btn-start-icon">▶</span>
+      <span id="btn-start-text">开始记录</span>
+    </button>
+    <button class="btn btn-mark" id="btn-mark" disabled title="标记当前时间">
+      📍 标记
+    </button>
+    <button class="btn btn-reset" id="btn-reset" title="重置">
+      ↺ 重置
+    </button>
+  </div>
+
+  <!-- Quick note -->
+  <div class="note-input-row">
+    <input type="text" id="note-input" placeholder="添加备注（可选）…" maxlength="80">
+    <button class="btn btn-add-note" id="btn-add-note" disabled>+ 备注标记</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar">
+    <span>标记数 <span class="val" id="stat-count">0</span></span>
+    <span>总时长 <span class="val" id="stat-total">00:00</span></span>
+  </div>
+
+  <!-- Marks -->
+  <div class="marks-section">
+    <h2>📋 时间记录</h2>
+    <div class="marks-list" id="marks-list">
+      <div class="empty-state">
+        <div class="icon">📝</div>
+        <div>点击「开始记录」开始计时<br>然后随时「标记」重要时刻</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function() {
+    'use strict';
+
+    // ── State ──
+    let recording = false;
+    let startTime = null;       // Date.now() when started
+    let accumulatedMs = 0;     // elapsed before pause (for pause/resume)
+    let marks = [];            // { elapsedMs, clock, note }
+    let timerInterval = null;
+    let pauseTime = null;      // Date.now() when paused
+
+    // ── DOM ──
+    const $elapsed = document.getElementById('elapsed');
+    const $currentTime = document.getElementById('current-time');
+    const $timerCard = document.getElementById('timer-card');
+    const $btnStart = document.getElementById('btn-start');
+    const $btnStartIcon = document.getElementById('btn-start-icon');
+    const $btnStartText = document.getElementById('btn-start-text');
+    const $btnMark = document.getElementById('btn-mark');
+    const $btnReset = document.getElementById('btn-reset');
+    const $btnAddNote = document.getElementById('btn-add-note');
+    const $noteInput = document.getElementById('note-input');
+    const $marksList = document.getElementById('marks-list');
+    const $statCount = document.getElementById('stat-count');
+    const $statTotal = document.getElementById('stat-total');
+
+    // ── Formatting ──
+
+    function formatHMS(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function formatMS(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function formatClock(ts) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString('zh-CN', { hour12: false });
+    }
+
+    function formatDelta(ms) {
+      if (ms < 1000) return '0s';
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      if (m > 0) return `${m}m${s}s`;
+      return `${s}s`;
+    }
+
+    // ── Timer ──
+
+    function getElapsed() {
+      if (!startTime) return 0;
+      if (recording) {
+        return accumulatedMs + (Date.now() - (pauseTime || startTime));
+      }
+      return accumulatedMs;
+    }
+
+    function updateDisplay() {
+      const ms = getElapsed();
+      $elapsed.textContent = formatHMS(ms);
+      $elapsed.classList.toggle('stopped', !recording && ms === 0);
+      $statTotal.textContent = formatMS(ms);
+    }
+
+    function startTimer() {
+      if (recording) return;
+      recording = true;
+      if (pauseTime) {
+        accumulatedMs += Date.now() - pauseTime;
+        pauseTime = null;
+      } else if (!startTime) {
+        startTime = Date.now();
+        // Add start mark
+        marks.push({
+          elapsedMs: 0,
+          clock: startTime,
+          note: '▶ 开始记录',
+          isStart: true,
+        });
+      }
+      $timerCard.classList.add('recording');
+      $btnStartIcon.textContent = '⏸';
+      $btnStartText.textContent = '暂停';
+      $btnMark.disabled = false;
+      $btnAddNote.disabled = false;
+      $btnStart.style.background = 'var(--danger)';
+      renderMarks();
+      timerInterval = setInterval(updateDisplay, 200);
+      updateDisplay();
+    }
+
+    function pauseTimer() {
+      if (!recording) return;
+      recording = false;
+      pauseTime = Date.now();
+      $timerCard.classList.remove('recording');
+      $btnStartIcon.textContent = '▶';
+      $btnStartText.textContent = '继续';
+      $btnMark.disabled = true;
+      $btnAddNote.disabled = true;
+      $btnStart.style.background = 'var(--accent)';
+      clearInterval(timerInterval);
+      timerInterval = null;
+      updateDisplay();
+    }
+
+    function resetTimer() {
+      if (recording) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+      recording = false;
+      startTime = null;
+      accumulatedMs = 0;
+      pauseTime = null;
+      marks = [];
+      $timerCard.classList.remove('recording');
+      $elapsed.textContent = '00:00:00';
+      $elapsed.classList.add('stopped');
+      $currentTime.textContent = '—';
+      $btnStartIcon.textContent = '▶';
+      $btnStartText.textContent = '开始记录';
+      $btnStart.style.background = 'var(--accent)';
+      $btnMark.disabled = true;
+      $btnAddNote.disabled = true;
+      $statCount.textContent = '0';
+      $statTotal.textContent = '00:00';
+      renderMarks();
+    }
+
+    // ── Mark ──
+
+    function addMark(note) {
+      if (!startTime) return;
+      const elapsedMs = getElapsed();
+      const clock = Date.now();
+      marks.push({ elapsedMs, clock, note: note || '' });
+      renderMarks();
+      updateDisplay();
+    }
+
+    function deleteMark(index) {
+      // Don't allow deleting the start marker
+      if (marks[index]?.isStart) return;
+      marks.splice(index, 1);
+      renderMarks();
+    }
+
+    // ── Render ──
+
+    function renderMarks() {
+      if (marks.length === 0) {
+        $marksList.innerHTML = `
+          <div class="empty-state">
+            <div class="icon">📝</div>
+            <div>点击「开始记录」开始计时<br>然后随时「标记」重要时刻</div>
+          </div>`;
+        $statCount.textContent = '0';
+        return;
+      }
+
+      $statCount.textContent = marks.filter(m => !m.isStart).length;
+
+      $marksList.innerHTML = marks.map((m, i) => {
+        const delta = i > 0 ? formatDelta(m.elapsedMs - marks[i - 1].elapsedMs) : '—';
+        const isStart = m.isStart;
+        return `
+          <div class="mark-item${isStart ? ' start-marker' : ''}">
+            <span class="index">${isStart ? '🟢' : '📍'}</span>
+            <span class="mark-time">${formatHMS(m.elapsedMs)}</span>
+            <span class="mark-delta">${delta}</span>
+            <span class="mark-note">${escHtml(m.note) || (isStart ? '开始记录' : '—')}</span>
+            <span class="mark-clock">${formatClock(m.clock)}</span>
+            ${!isStart ? `<button class="btn-delete" data-index="${i}" title="删除">×</button>` : ''}
+          </div>`;
+      }).join('');
+
+      // Bind delete buttons
+      $marksList.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteMark(parseInt(btn.dataset.index));
+        });
+      });
+    }
+
+    function escHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    // ── Events ──
+
+    $btnStart.addEventListener('click', () => {
+      if (recording) {
+        pauseTimer();
+      } else {
+        startTimer();
+      }
+    });
+
+    $btnMark.addEventListener('click', () => {
+      const note = $noteInput.value.trim();
+      addMark(note);
+      $noteInput.value = '';
+    });
+
+    $btnAddNote.addEventListener('click', () => {
+      const note = $noteInput.value.trim();
+      if (note) {
+        addMark(note);
+        $noteInput.value = '';
+      }
+    });
+
+    $btnReset.addEventListener('click', () => {
+      if (marks.length > 0 || getElapsed() > 0) {
+        if (confirm('确定要重置吗？所有记录将被清除。')) {
+          resetTimer();
+        }
+      } else {
+        resetTimer();
+      }
+    });
+
+    // Enter key to mark
+    $noteInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const note = $noteInput.value.trim();
+        addMark(note);
+        $noteInput.value = '';
+      }
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      switch (e.key.toLowerCase()) {
+        case ' ':
+          e.preventDefault();
+          if (recording) pauseTimer(); else startTimer();
+          break;
+        case 'm':
+          if (recording) {
+            addMark($noteInput.value.trim());
+            $noteInput.value = '';
+          }
+          break;
+      }
+    });
+
+    // Update clock every second
+    setInterval(() => {
+      $currentTime.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    }, 1000);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ReviewStatus {
+  pending
+  approved
+  rejected
+}
+
+model Zone {
+  id          Int       @id @default(autoincrement())
+  name        String
+  slug        String    @unique
+  description String?
+  minScore    Float     @default(0)
+  maxScore    Float     @default(1)
+  sortOrder   Int       @default(0)
+  color       String?
+  emoji       String?
+  articles    Article[]
+}
+
+model Article {
+  id            Int          @id @default(autoincrement())
+  title         String
+  slug          String       @unique
+  authorName    String       @default("匿名拾荒者")
+  abstract      String?
+  content       String
+  tags          String[]     @default([])
+  zoneId        Int          @default(1)
+  zone          Zone         @relation(fields: [zoneId], references: [id])
+  upvotes       Int          @default(0)
+  downvotes     Int          @default(0)
+  wilsonScore   Float        @default(0)
+  totalVotes    Int          @default(0)
+  reviewStatus  ReviewStatus @default(pending)
+  reviewComment String?
+  reviewScore   Int?
+  reviewedBy    String       @default("AI嗅探兽")
+  viewCount     Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  userId        String?
+  votes         Vote[]
+  comments      Comment[]
+}
+
+model Vote {
+  id        Int      @id @default(autoincrement())
+  articleId Int
+  article   Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  userId    String?
+  voterFp   String?
+  score     Int
+  createdAt DateTime @default(now())
+
+  @@unique([articleId, userId])
+  @@unique([articleId, voterFp])
+}
+
+model Comment {
+  id         Int      @id @default(autoincrement())
+  articleId  Int
+  article    Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  authorName String   @default("匿名路人")
+  content    String
+  createdAt  DateTime @default(now())
+  userId     String?
+}
+
+model ReviewerApplication {
+  id        Int      @id @default(autoincrement())
+  userId    String   @unique
+  reason    String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+}
