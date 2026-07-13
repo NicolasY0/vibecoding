@@ -156,6 +156,16 @@
   }
   .btn-reset:hover { color: var(--text); border-color: #555; }
 
+  .btn-export {
+    background: transparent;
+    color: #5c9;
+    border-color: #2a4a3a;
+    font-size: 12px;
+    padding: 8px 16px;
+  }
+  .btn-export:hover { color: #7ec; border-color: #3a6a4a; background: rgba(80, 200, 140, 0.06); }
+  .btn-export:disabled { opacity: 0.25; cursor: not-allowed; }
+
   /* ── Note input ── */
   .note-input-row {
     display: flex;
@@ -312,6 +322,9 @@
     <button class="btn btn-reset" id="btn-reset" title="重置">
       ↺ 重置
     </button>
+    <button class="btn btn-export" id="btn-export" disabled title="导出为 TXT">
+      ⬇ 导出
+    </button>
   </div>
 
   <!-- Quick note -->
@@ -360,6 +373,7 @@
     const $btnMark = document.getElementById('btn-mark');
     const $btnReset = document.getElementById('btn-reset');
     const $btnAddNote = document.getElementById('btn-add-note');
+    const $btnExport = document.getElementById('btn-export');
     const $noteInput = document.getElementById('note-input');
     const $marksList = document.getElementById('marks-list');
     const $statCount = document.getElementById('stat-count');
@@ -434,6 +448,7 @@
       $btnStartText.textContent = '暂停';
       $btnMark.disabled = false;
       $btnAddNote.disabled = false;
+      $btnExport.disabled = false;
       $btnStart.style.background = 'var(--danger)';
       renderMarks();
       timerInterval = setInterval(updateDisplay, 200);
@@ -474,6 +489,7 @@
       $btnStart.style.background = 'var(--accent)';
       $btnMark.disabled = true;
       $btnAddNote.disabled = true;
+      $btnExport.disabled = true;
       $statCount.textContent = '0';
       $statTotal.textContent = '00:00';
       renderMarks();
@@ -495,6 +511,81 @@
       if (marks[index]?.isStart) return;
       marks.splice(index, 1);
       renderMarks();
+    }
+
+    // ── Export ──
+
+    function exportTxt() {
+      if (marks.length === 0) return;
+
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+      const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+      const totalMs = getElapsed();
+      const markCount = marks.filter(m => !m.isStart).length;
+
+      const pad = (s, len) => {
+        // Count Chinese chars as width 2, ASCII as width 1
+        let w = 0;
+        for (const ch of s) w += ch.charCodeAt(0) > 127 ? 2 : 1;
+        return s + ' '.repeat(Math.max(0, len - w));
+      };
+
+      const lines = [];
+      lines.push('══════════════════════════════════════');
+      lines.push('  时间标记笔记 — 导出记录');
+      lines.push('══════════════════════════════════════');
+      lines.push('');
+      lines.push(`导出时间: ${dateStr} ${timeStr}`);
+      lines.push(`记录日期: ${formatClockFull(marks[0].clock)}`);
+      lines.push(`总时长:   ${formatHMS(totalMs)}`);
+      lines.push(`标记数:   ${markCount}`);
+      lines.push('');
+      lines.push('──────────────────────────────────────');
+      lines.push('  时间点记录');
+      lines.push('──────────────────────────────────────');
+      lines.push('');
+
+      for (let i = 0; i < marks.length; i++) {
+        const m = marks[i];
+        const icon = m.isStart ? '[开始]' : `[标记${String(i).padStart(2, '0')}]`;
+        const delta = i > 0 ? formatDeltaPad(m.elapsedMs - marks[i - 1].elapsedMs) : '  —  ';
+        const note = m.note || (m.isStart ? '开始记录' : '(无备注)');
+        lines.push(`${icon} ${formatHMS(m.elapsedMs)}  +${delta}  ${formatClockFull(m.clock)}  ${note}`);
+      }
+
+      lines.push('');
+      lines.push('──────────────────────────────────────');
+      lines.push('  结束');
+
+      const text = lines.join('\n');
+
+      // Download as .txt
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `笔记_${dateStr.replace(/\//g, '-')}_${timeStr.replace(/:/g, '-')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function formatClockFull(ts) {
+      const d = new Date(ts);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      const s = String(d.getSeconds()).padStart(2, '0');
+      return `${y}-${mo}-${day} ${h}:${mi}:${s}`;
+    }
+
+    function formatDeltaPad(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${String(m).padStart(2, '0')}m${String(s).padStart(2, '0')}s`;
     }
 
     // ── Render ──
@@ -575,6 +666,8 @@
       }
     });
 
+    $btnExport.addEventListener('click', exportTxt);
+
     // Enter key to mark
     $noteInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -596,6 +689,11 @@
           if (recording) {
             addMark($noteInput.value.trim());
             $noteInput.value = '';
+          }
+          break;
+        case 'e':
+          if (!e.ctrlKey && !e.metaKey) {
+            exportTxt();
           }
           break;
       }
