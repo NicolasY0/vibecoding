@@ -1,10 +1,13 @@
 /**
- * typing-engine.js — Async typing orchestrator.
+ * typing-engine.js — Async typing orchestrator with word-level rhythm.
+ *
+ * Flow per word:
+ *   1. Pause (thinking/reading ahead) — sentence boundaries get longer pauses
+ *   2. Type each character rapidly & fluently (flow state)
+ *   3. Between characters: realistic dwell time (key held before release)
  *
  * State machine:
  *   IDLE → TYPING → (ERROR → CORRECTING → TYPING) → PAUSED → TYPING → DONE
- *
- * Uses HumanModel for timing/behavior decisions and KeyEvents for DOM dispatch.
  */
 
 class TypingEngine {
@@ -16,19 +19,18 @@ class TypingEngine {
     this._model = humanModel;
     this._callbacks = callbacks;
 
-    // State
-    this._state = 'IDLE';       // IDLE | TYPING | CORRECTING | PAUSED | DONE
+    this._state = 'IDLE';
     this._text = '';
     this._element = null;
     this._position = 0;
     this._abortController = null;
 
-    // Error tracking — only one pending correction at a time
-    this._pendingError = null;  // { wrongChars: [], correctChar } or null
-    this._lastTypedChar = '';
+    // Resume support
+    this._resumeTokenIndex = 0;
+    this._resumeCharIndex = 0;
+    this._tokens = [];
 
-    // Progress tracking
-    this._totalChars = 0;
+    // Timing
     this._startTime = 0;
     this._pausedDuration = 0;
     this._pauseStart = 0;
@@ -36,41 +38,33 @@ class TypingEngine {
 
   // ── Public API ───────────────────────────────────────────────────
 
-  /**
-   * Start typing `text` into `element`.
-   * @param {string} text - the text to type
-   * @param {HTMLElement} element - target <input>, <textarea>, or contenteditable
-   */
   async start(text, element) {
     if (this._state === 'TYPING' || this._state === 'CORRECTING') {
-      console.warn('[MockTyping] Already typing — call stop() first');
+      console.warn('[MockTyping] Already typing');
       return;
     }
 
     this._text = text;
     this._element = element;
     this._position = 0;
-    this._totalChars = text.length;
     this._startTime = Date.now();
     this._pausedDuration = 0;
-    this._pendingError = null;
-    this._lastTypedChar = '';
+    this._resumeTokenIndex = 0;
+    this._resumeCharIndex = 0;
+    this._tokens = this._tokenize(text);
 
+    this._model.reset();
     this._abortController = new AbortController();
     this._setState('TYPING');
 
     try {
       await this._typingLoop();
     } catch (err) {
-      if (err?.name === 'AbortError') {
-        // Normal stop/pause — no error
-      } else {
-        console.error('[MockTyping] Engine error:', err);
-      }
+      if (err?.name === 'AbortError') { /* normal */ }
+      else { console.error('[MockTyping] Engine error:', err); }
     }
   }
 
-  /** Pause typing after the current character completes. */
   pause() {
     if (this._state !== 'TYPING' && this._state !== 'CORRECTING') return;
     this._setState('PAUSED');
@@ -78,18 +72,14 @@ class TypingEngine {
     this._abortController?.abort('paused');
   }
 
-  /** Resume typing after a pause. */
   async resume() {
     if (this._state !== 'PAUSED') return;
-
     if (this._pauseStart) {
       this._pausedDuration += Date.now() - this._pauseStart;
       this._pauseStart = 0;
     }
-
     this._abortController = new AbortController();
     this._setState('TYPING');
-
     try {
       await this._typingLoop();
     } catch (err) {
@@ -98,7 +88,6 @@ class TypingEngine {
     }
   }
 
-  /** Immediately stop typing. */
   stop() {
     if (this._state === 'IDLE' || this._state === 'DONE') return;
     this._setState('DONE');
@@ -107,73 +96,131 @@ class TypingEngine {
     if (this._callbacks.onDone) this._callbacks.onDone();
   }
 
-  /** @returns {{ state: string, position: number, total: number, elapsed: number }} */
   getProgress() {
     return {
       state: this._state,
       position: this._position,
-      total: this._totalChars,
+      total: this._text.length,
       elapsed: this._state === 'IDLE' ? 0
         : Date.now() - this._startTime - this._pausedDuration,
     };
   }
 
-  // ── Internal: main typing loop ───────────────────────────────────
+  // ── Main typing loop (word-rhythm) ──────────────────────────────
 
   async _typingLoop() {
     const signal = this._abortController?.signal;
+    let isSentenceStart = true;
 
-    while (this._position < this._text.length) {
+    for (let ti = this._resumeTokenIndex; ti < this._tokens.length; ti++) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (this._state === 'PAUSED') return; // Wait for resume()
 
-      const char = this._text[this._position];
-      const prevChar = this._position > 0 ? this._text[this._position - 1] : '';
+      const token = this._tokens[ti];
+      const isWord = /^[a-zA-Z0-9'\-]+$/.test(token);
+      const isPunctEnd = /^[.!?]$/.test(token);           // sentence-ending punctuation
+      const isOtherPunct = /^[,;:\-—]$/.test(token);      // mid-sentence punctuation
+      const isSpace = /^\s+$/.test(token);
 
-      // Compute word/sentence position for the model
-      const wordPos = this._getWordPosition();
-      const sentPos = this._getSentencePosition();
+      if (isWord) {
+        // ── WORD: pause before, then type rapidly ──
+        const pauseMs = this._model.getPreWordPause(token.length, isSentenceStart, ti);
+        if (pauseMs > 0) {
+          await this._sleep(pauseMs, signal);
+          if (signal?.aborted) return;
+        }
+        isSentenceStart = false;
 
-      // ── Check for pause ──
-      const pauseInfo = this._model.shouldPause(char, prevChar);
-      if (pauseInfo.pause) {
-        await this._sleep(pauseInfo.duration, signal);
+        // Type each character in the word (fast & fluid)
+        await this._typeWord(token, signal);
         if (signal?.aborted) return;
+
+      } else if (isSpace) {
+        // ── WHITESPACE: quick short tap ──
+        await this._typeToken(token, signal, false);
+
+      } else if (isPunctEnd) {
+        // ── SENTENCE-END PUNCTUATION (.!?) ──
+        await this._typeToken(token, signal, true);
+        isSentenceStart = true; // Next word gets think-pause
+        // Extra post-sentence pause — natural reflection moment
+        await this._sleep(80 + Math.random() * 200, signal);
+
+      } else if (isOtherPunct) {
+        // ── OTHER PUNCTUATION — quick, then short pause ──
+        await this._typeToken(token, signal, true);
+        await this._sleep(30 + Math.random() * 80, signal);
+
+      } else {
+        // ── Everything else ──
+        await this._typeToken(token, signal, false);
       }
 
-      // ── Check for error ──
-      if (this._model.shouldMakeError(this._text, this._position)) {
-        await this._handleError(char, prevChar, signal);
-        if (signal?.aborted) return;
-        continue; // Skip the normal type — error handler advances position
-      }
-
-      // ── Get delay ──
-      const delay = this._model.getDelay(prevChar, char, wordPos, sentPos);
-      await this._sleep(delay, signal);
-      if (signal?.aborted) return;
-
-      // ── Type the character ──
-      KeyEvents.simulateKeyPress(this._element, char);
-      this._lastTypedChar = char;
-      this._position++;
+      // Save resume position after each token
+      this._resumeTokenIndex = ti + 1;
+      this._resumeCharIndex = 0;
       this._notifyProgress();
     }
 
-    // Done!
+    // Done
     this._setState('DONE');
     this._notifyProgress();
     if (this._callbacks.onDone) this._callbacks.onDone();
   }
 
-  // ── Internal: error handling ─────────────────────────────────────
+  /**
+   * Type a single token (space, punctuation, or short non-word text).
+   */
+  async _typeToken(token, signal, isPunct) {
+    for (let ci = 0; ci < token.length; ci++) {
+      if (signal?.aborted) return;
+      const char = token[ci];
+
+      const delay = isPunct
+        ? 30 + Math.random() * 80   // punctuation: quick
+        : 25 + Math.random() * 50;  // space: very quick
+
+      await this._sleep(delay, signal);
+      if (signal?.aborted) return;
+
+      const dwell = this._model.getDwellTime(char);
+      await KeyEvents.simulateKeyPress(this._element, char, dwell);
+      this._model.recordChar();
+      this._position++;
+    }
+  }
 
   /**
-   * Handle a typing error at the current position.
-   * 1. Generate the wrong character(s)
-   * 2. Type them
-   * 3. Optionally correct (backspace and retype correctly)
+   * Type a word with rapid, fluid character-by-character typing.
+   * This is the burst phase of the "burst-pause" pattern.
    */
+  async _typeWord(word, signal) {
+    for (let ci = 0; ci < word.length; ci++) {
+      if (signal?.aborted) return;
+
+      const char = word[ci];
+      const prevChar = ci > 0 ? word[ci - 1] : '';
+
+      // Character delay (fast mid-word, slight slowdown at edges)
+      const delay = this._model.getCharDelay(char, prevChar, ci, word.length);
+      await this._sleep(delay, signal);
+      if (signal?.aborted) return;
+
+      // ── Error injection ──
+      if (this._model.shouldMakeError(word, ci)) {
+        await this._handleError(char, prevChar, signal);
+        continue;
+      }
+
+      // Type with dwell
+      const dwell = this._model.getDwellTime(char);
+      await KeyEvents.simulateKeyPress(this._element, char, dwell);
+      this._model.recordChar();
+      this._position++;
+    }
+  }
+
+  // ── Error handling ──────────────────────────────────────────────
+
   async _handleError(correctChar, prevChar, signal) {
     const nextChar = this._position + 1 < this._text.length
       ? this._text[this._position + 1] : '';
@@ -182,88 +229,74 @@ class TypingEngine {
 
     const wrongChar = this._model.generateError(correctChar, nextChar);
 
-    // ── Type the wrong character(s) ──
     if (wrongChar === '') {
-      // "Skip" error — just don't type this char, effectively a miss
+      // Skip error — char is missed
       this._position++;
       this._notifyProgress();
       this._setState('TYPING');
       return;
     }
 
-    // Small hesitation before error (subtle tell — real people sometimes hesitate)
-    const hesitation = 40 + Math.floor(Math.random() * 150);
-    await this._sleep(hesitation, signal);
+    // Hesitate slightly before error
+    await this._sleep(40 + Math.random() * 120, signal);
     if (signal?.aborted) return;
 
-    // Type each wrong char
+    // Type wrong chars
     const typedWrong = [];
     for (const ch of wrongChar) {
-      const errDelay = 30 + Math.floor(Math.random() * 120);
-      await this._sleep(errDelay, signal);
+      await this._sleep(25 + Math.random() * 80, signal);
       if (signal?.aborted) return;
-
-      KeyEvents.simulateKeyPress(this._element, ch);
+      const dwell = this._model.getDwellTime(ch);
+      await KeyEvents.simulateKeyPress(this._element, ch, dwell);
       typedWrong.push(ch);
     }
 
-    // Advance position past the correct char (we typed wrong chars instead)
     this._position++;
-    this._lastTypedChar = wrongChar[wrongChar.length - 1];
+    this._model.recordChar();
 
-    // ── Correct or leave it ──
+    // Correct or leave it
     if (this._model.shouldCorrect()) {
       this._setState('CORRECTING');
-
-      // Reaction delay — "notice" the mistake
-      const correctionDelay = this._model.getCorrectionDelay();
-      await this._sleep(correctionDelay, signal);
+      await this._sleep(this._model.getCorrectionDelay(), signal);
       if (signal?.aborted) return;
-
-      // Backspace the wrong chars and retype the correct one
       await this._correctSingleError(typedWrong, correctChar, signal);
     }
-    // If not correcting, the wrong chars stay on the page — realistic human behavior
 
     this._notifyProgress();
     this._setState('TYPING');
   }
 
-  /**
-   * Backspace the wrong chars and retype the correct one.
-   * @param {string[]} wrongChars - characters typed by mistake
-   * @param {string} correctChar - the character that should have been typed
-   */
   async _correctSingleError(wrongChars, correctChar, signal) {
     const totalToDelete = wrongChars.length;
 
-    // Occasionally use Ctrl+Backspace for whole-word errors (~20% chance)
-    if (totalToDelete >= 3 && Math.random() < 0.2) {
-      await this._sleep(50 + Math.floor(Math.random() * 150), signal);
+    if (totalToDelete >= 3 && Math.random() < 0.68) {
+      // Ctrl+Backspace for longer errors (common human behavior)
+      await this._sleep(50 + Math.random() * 120, signal);
       if (signal?.aborted) return;
-      KeyEvents.simulateCtrlBackspace(this._element);
+      const dwell = this._model.getDwellTime();
+      await KeyEvents.simulateCtrlBackspace(this._element, dwell);
     } else {
       // Individual backspaces with realistic timing
       for (let i = 0; i < totalToDelete; i++) {
-        const bsDelay = 60 + Math.floor(Math.random() * 200);
-        await this._sleep(bsDelay, signal);
+        await this._sleep(50 + Math.random() * 160, signal);
         if (signal?.aborted) return;
-        KeyEvents.simulateBackspace(this._element, 1);
+        const dwell = this._model.getDwellTime();
+        await KeyEvents.simulateBackspace(this._element, 1, dwell);
       }
     }
 
-    // Small pause after backspacing before retyping
-    await this._sleep(80 + Math.floor(Math.random() * 250), signal);
+    // Brief pause after deleting — "finding the right key again"
+    await this._sleep(70 + Math.random() * 200, signal);
     if (signal?.aborted) return;
 
     // Retype correct character (slightly faster — "fixing it quickly")
-    const retypeDelay = 30 + Math.floor(Math.random() * 100);
-    await this._sleep(retypeDelay, signal);
+    await this._sleep(25 + Math.random() * 70, signal);
     if (signal?.aborted) return;
-    KeyEvents.simulateKeyPress(this._element, correctChar);
+    const dwell = this._model.getDwellTime(correctChar);
+    await KeyEvents.simulateKeyPress(this._element, correctChar, dwell);
   }
 
-  // ── Internal: helpers ────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────
 
   async _sleep(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -290,23 +323,40 @@ class TypingEngine {
     }
   }
 
-  /** Find the position within the current word. */
-  _getWordPosition() {
-    let pos = 0;
-    for (let i = this._position - 1; i >= 0; i--) {
-      if (this._text[i] === ' ' || this._text[i] === '\n') break;
-      pos++;
-    }
-    return pos;
-  }
+  /**
+   * Tokenize text into words, spaces, and punctuation.
+   * "Hello, world!" → ["Hello", ",", " ", "world", "!"]
+   */
+  _tokenize(text) {
+    const tokens = [];
+    let i = 0;
+    while (i < text.length) {
+      const ch = text[i];
 
-  /** Find the position within the current sentence. */
-  _getSentencePosition() {
-    let pos = 0;
-    for (let i = this._position - 1; i >= 0; i--) {
-      if (/[.!?\n]/.test(this._text[i])) break;
-      pos++;
+      // Whitespace
+      if (/\s/.test(ch)) {
+        let ws = '';
+        while (i < text.length && /\s/.test(text[i])) {
+          ws += text[i]; i++;
+        }
+        tokens.push(ws);
+        continue;
+      }
+
+      // Punctuation (single char each for natural rhythm)
+      if (/[.,!?;:\-—'"]/.test(ch)) {
+        tokens.push(ch);
+        i++;
+        continue;
+      }
+
+      // Word characters (letters, digits, and word-internal punctuation)
+      let word = '';
+      while (i < text.length && !/[\s.,!?;:\-—]/.test(text[i])) {
+        word += text[i]; i++;
+      }
+      if (word) tokens.push(word);
     }
-    return pos;
+    return tokens;
   }
 }

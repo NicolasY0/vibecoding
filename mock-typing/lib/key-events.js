@@ -9,6 +9,11 @@
  */
 
 const KeyEvents = (() => {
+  // ── Async helper ────────────────────────────────────────────────
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
   // ── Native value setters (bypass framework overrides) ────────────
 
   const nativeTextareaSetter = Object.getOwnPropertyDescriptor(
@@ -267,21 +272,26 @@ const KeyEvents = (() => {
    * Simulate typing a single character into an element.
    * Dispatches: keydown → keypress → (DOM insert) → input → keyup
    */
-  function simulateKeyPress(element, char) {
+  /**
+   * Simulate typing a single character with realistic dwell time.
+   * Dwell time = how long a human holds the key before releasing (40-130ms).
+   * This is a critical anti-detection signal — bots release instantly.
+   */
+  async function simulateKeyPress(element, char, dwellMs = 60) {
     const keyInfo = getKeyInfo(char);
 
-    // Ensure element has focus (React/Angular listeners are bound to focused element)
+    // Ensure element has focus
     if (document.activeElement !== element) {
       element.focus();
     }
 
-    // 0. beforeinput (modern frameworks listen for this)
+    // 0. beforeinput
     element.dispatchEvent(buildBeforeInputEvent('insertText', char));
 
     // 1. keydown
     element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
 
-    // 2. keypress (legacy, but many detection scripts check it)
+    // 2. keypress (legacy)
     element.dispatchEvent(buildKeyEvent('keypress', keyInfo));
 
     // 3. Insert the character into the DOM
@@ -290,17 +300,16 @@ const KeyEvents = (() => {
     // 4. input event
     element.dispatchEvent(buildInputEvent('insertText', char, element));
 
-    // 5. keyup
+    // 5. DWELL — hold the key like a human (critical for justhuman.app!)
+    if (dwellMs > 0) {
+      await sleep(dwellMs);
+    }
+
+    // 6. keyup — release the key
     element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
 
-    // 6. Also dispatch change event (some frameworks debounce on this)
+    // 7. change event
     element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-
-    // 7. For React 18+ — trigger the framework's synthetic event system
-    // by also dispatching via the element's native event handler
-    if (typeof element.oninput === 'function') {
-      try { element.oninput(buildInputEvent('insertText', char)); } catch (_) {}
-    }
 
     return keyInfo;
   }
@@ -309,7 +318,7 @@ const KeyEvents = (() => {
    * Simulate pressing Backspace `count` times.
    * Dispatches: keydown → (DOM delete) → input → keyup   (× count)
    */
-  function simulateBackspace(element, count = 1) {
+  async function simulateBackspace(element, count = 1, dwellMs = 50) {
     if (document.activeElement !== element) {
       element.focus();
     }
@@ -336,6 +345,11 @@ const KeyEvents = (() => {
       // input event
       element.dispatchEvent(buildInputEvent('deleteContentBackward', null, element));
 
+      // Dwell
+      if (dwellMs > 0) {
+        await sleep(dwellMs);
+      }
+
       // keyup
       element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
     }
@@ -344,7 +358,7 @@ const KeyEvents = (() => {
   /**
    * Simulate Ctrl+Backspace — delete the last word.
    */
-  function simulateCtrlBackspace(element) {
+  async function simulateCtrlBackspace(element, dwellMs = 60) {
     const keyInfo = {
       key: 'Backspace',
       code: 'Backspace',
@@ -355,6 +369,7 @@ const KeyEvents = (() => {
       ctrlKey: true,
     };
 
+    element.dispatchEvent(buildBeforeInputEvent('deleteWordBackward', null));
     element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
 
     // Delete last word
@@ -370,6 +385,11 @@ const KeyEvents = (() => {
     deleteText(element, deleteLen);
 
     element.dispatchEvent(buildInputEvent('deleteWordBackward', null, element));
+
+    if (dwellMs > 0) {
+      await sleep(dwellMs);
+    }
+
     element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
   }
 
