@@ -128,11 +128,14 @@ class HumanModel {
     }
 
     // ── Flight time (keyboard distance) ──
-    // Finger travel time between physical key positions.
-    // This models the reality that 'a'→'p' takes longer than 'a'→'s'.
-    if (prevChar && /[a-zA-Z0-9 ,.;]/.test(prevChar) && /[a-zA-Z0-9 ,.;]/.test(char)) {
-      const flight = KeyEvents.getFlightTime(prevChar, char);
-      baseInterval += flight;
+    // Real typists anticipate keys — the hand moves DURING the current
+    // keystroke, so the effective flight delay is much smaller than the
+    // raw physical distance suggests. Cap it and add heavy jitter.
+    if (prevChar && wordPos > 0 && /[a-z]{2}/i.test(prevChar + char)) {
+      const rawFlight = KeyEvents.getFlightTime(prevChar, char);
+      // Effective flight is ~25% of raw (anticipation) + heavy jitter
+      const effectiveFlight = Math.round(rawFlight * 0.25 * (0.3 + Math.random() * 1.4));
+      baseInterval += Math.min(effectiveFlight, 50); // Cap at 50ms
     }
 
     // ── Case switching slowdown ──

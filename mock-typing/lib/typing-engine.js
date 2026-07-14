@@ -191,8 +191,9 @@ class TypingEngine {
 
   /**
    * Type a word with rapid, fluid character-by-character typing.
-   * Uses KEY ROLLOVER: the next key's keydown fires before the previous
-   * key's keyup — a hallmark of trained typists that bots never replicate.
+   * Uses PROBABILISTIC key rollover: on fast transitions, the next keydown
+   * may fire before the previous keyup. Real typists only rollover on
+   * easy/fast transitions, not every key — uniform rollover is a bot tell.
    */
   async _typeWord(word, signal) {
     let prevKeyInfo = null;
@@ -203,36 +204,45 @@ class TypingEngine {
       const char = word[ci];
       const prevChar = ci > 0 ? word[ci - 1] : '';
 
-      // Character delay (fast mid-word, slight slowdown at edges)
+      // Character delay
       const delay = this._model.getCharDelay(char, prevChar, ci, word.length);
       await this._sleep(delay, signal);
       if (signal?.aborted) return;
 
       // ── Error injection ──
       if (this._model.shouldMakeError(word, ci)) {
-        // Clean up any pending key before error
         if (prevKeyInfo) {
-          await this._sleep(this._model.getDwellTime(char) * 0.5, signal);
-          KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+          await KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
           prevKeyInfo = null;
         }
         await this._handleError(char, prevChar, signal);
         continue;
       }
 
-      // ── ROLLOVER: keydown for current char ──
-      const keyInfo = KeyEvents.simulateKeyDown(this._element, char);
+      // ── Determine if we should rollover ──
+      const shouldRollover = prevKeyInfo && delay < 55 && /[a-z]/i.test(prevChar + char);
 
-      // Release PREVIOUS key after a brief overlap (the rollover effect)
-      if (prevKeyInfo) {
-        // Overlap: wait ~40% of dwell before releasing previous key
-        const overlapDelay = Math.round(this._model.getDwellTime(char) * 0.4);
+      if (shouldRollover) {
+        // ROLLOVER: keydown current before keyup previous
+        const keyInfo = await KeyEvents.simulateKeyDown(this._element, char);
+
+        // Wait 15-30% of dwell (variable overlap, not uniform)
+        const overlapPct = 0.15 + Math.random() * 0.15;
+        const overlapDelay = Math.round(this._model.getDwellTime(char) * overlapPct);
         await this._sleep(overlapDelay, signal);
         if (signal?.aborted) return;
-        KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+
+        await KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+        prevKeyInfo = keyInfo;
+      } else {
+        // NO ROLLOVER — release previous normally, then type current
+        if (prevKeyInfo) {
+          await KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+        }
+        const keyInfo = await KeyEvents.simulateKeyDown(this._element, char);
+        prevKeyInfo = keyInfo;
       }
 
-      prevKeyInfo = keyInfo;
       this._model.recordChar();
       this._position++;
     }
@@ -242,7 +252,7 @@ class TypingEngine {
       const finalDwell = this._model.getDwellTime(word[word.length - 1]);
       await this._sleep(finalDwell, signal);
       if (signal?.aborted) return;
-      KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+      await KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
     }
   }
 

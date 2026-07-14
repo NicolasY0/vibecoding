@@ -444,10 +444,17 @@ const KeyEvents = (() => {
   // ── Shift key simulation ────────────────────────────────────────
 
   function simulateShiftKeyDown(element) {
+    // Shift is pressed ~30-80ms BEFORE the character key (anticipation)
     element.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Shift', code: 'ShiftLeft', keyCode: 16, which: 16,
       shiftKey: true, bubbles: true, cancelable: true, composed: true,
     }));
+  }
+
+  async function simulateShiftKeyDownAsync(element) {
+    simulateShiftKeyDown(element);
+    // Natural gap between shift press and character
+    await sleep(30 + Math.random() * 50);
   }
 
   function simulateShiftKeyUp(element) {
@@ -457,6 +464,12 @@ const KeyEvents = (() => {
     }));
   }
 
+  async function simulateShiftKeyUpAsync(element) {
+    // Shift is released ~20-50ms AFTER the character key (finger coordination)
+    await sleep(20 + Math.random() * 30);
+    simulateShiftKeyUp(element);
+  }
+
   // ── Split keyDown / keyUp for rollover ──────────────────────────
 
   /**
@@ -464,14 +477,17 @@ const KeyEvents = (() => {
    * Does NOT dispatch keyup — caller handles that for rollover overlap.
    * Returns keyInfo so caller can dispatch matching keyup later.
    */
-  function simulateKeyDown(element, char) {
+  async function simulateKeyDown(element, char) {
     const keyInfo = getKeyInfo(char);
 
     if (document.activeElement !== element) element.focus();
 
-    // Shift key simulation
+    // Shift key simulation with natural anticipation gap
     const needsShift = keyInfo.shiftKey;
-    if (needsShift) simulateShiftKeyDown(element);
+    if (needsShift) {
+      simulateShiftKeyDown(element);
+      await sleep(35 + Math.random() * 50); // Shift pressed before char key
+    }
 
     element.dispatchEvent(buildBeforeInputEvent('insertText', char));
     element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
@@ -479,17 +495,21 @@ const KeyEvents = (() => {
     insertText(element, char);
     element.dispatchEvent(buildInputEvent('insertText', char, element));
 
-    return keyInfo; // caller uses this for keyup
+    return keyInfo;
   }
 
   /**
    * Dispatch keyup for a previously dispatched keydown.
    */
-  function simulateKeyUp(element, keyInfo) {
+  async function simulateKeyUp(element, keyInfo) {
     element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
 
-    // Release shift if it was used
-    if (keyInfo.shiftKey) simulateShiftKeyUp(element);
+    // Release shift AFTER character keyup (finger coordination — shift
+    // finger is slower to release than the character finger)
+    if (keyInfo.shiftKey) {
+      await sleep(25 + Math.random() * 40);
+      simulateShiftKeyUp(element);
+    }
 
     element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
   }
