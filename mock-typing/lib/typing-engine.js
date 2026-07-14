@@ -191,9 +191,12 @@ class TypingEngine {
 
   /**
    * Type a word with rapid, fluid character-by-character typing.
-   * This is the burst phase of the "burst-pause" pattern.
+   * Uses KEY ROLLOVER: the next key's keydown fires before the previous
+   * key's keyup — a hallmark of trained typists that bots never replicate.
    */
   async _typeWord(word, signal) {
+    let prevKeyInfo = null;
+
     for (let ci = 0; ci < word.length; ci++) {
       if (signal?.aborted) return;
 
@@ -207,15 +210,39 @@ class TypingEngine {
 
       // ── Error injection ──
       if (this._model.shouldMakeError(word, ci)) {
+        // Clean up any pending key before error
+        if (prevKeyInfo) {
+          await this._sleep(this._model.getDwellTime(char) * 0.5, signal);
+          KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+          prevKeyInfo = null;
+        }
         await this._handleError(char, prevChar, signal);
         continue;
       }
 
-      // Type with dwell
-      const dwell = this._model.getDwellTime(char);
-      await KeyEvents.simulateKeyPress(this._element, char, dwell);
+      // ── ROLLOVER: keydown for current char ──
+      const keyInfo = KeyEvents.simulateKeyDown(this._element, char);
+
+      // Release PREVIOUS key after a brief overlap (the rollover effect)
+      if (prevKeyInfo) {
+        // Overlap: wait ~40% of dwell before releasing previous key
+        const overlapDelay = Math.round(this._model.getDwellTime(char) * 0.4);
+        await this._sleep(overlapDelay, signal);
+        if (signal?.aborted) return;
+        KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
+      }
+
+      prevKeyInfo = keyInfo;
       this._model.recordChar();
       this._position++;
+    }
+
+    // Release the final key
+    if (prevKeyInfo) {
+      const finalDwell = this._model.getDwellTime(word[word.length - 1]);
+      await this._sleep(finalDwell, signal);
+      if (signal?.aborted) return;
+      KeyEvents.simulateKeyUp(this._element, prevKeyInfo);
     }
   }
 

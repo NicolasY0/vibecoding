@@ -393,6 +393,107 @@ const KeyEvents = (() => {
     element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
   }
 
+  // ── Keyboard Geometry & Flight Time ─────────────────────────────
+
+  /**
+   * QWERTY key positions: [row, col, hand]
+   * hand: 'L' = left, 'R' = right
+   * Used to calculate realistic finger travel time between keys.
+   */
+  const KEY_POS = {
+    '`':[0,0,'L'],'1':[0,1,'L'],'2':[0,2,'L'],'3':[0,3,'L'],'4':[0,4,'L'],'5':[0,5,'L'],
+    '6':[0,6,'R'],'7':[0,7,'R'],'8':[0,8,'R'],'9':[0,9,'R'],'0':[0,10,'R'],'-':[0,11,'R'],'=':[0,12,'R'],
+    'q':[1,1.2,'L'],'w':[1,2.2,'L'],'e':[1,3.2,'L'],'r':[1,4.2,'L'],'t':[1,5.2,'L'],
+    'y':[1,6.2,'R'],'u':[1,7.2,'R'],'i':[1,8.2,'R'],'o':[1,9.2,'R'],'p':[1,10.2,'R'],'[':[1,11.2,'R'],']':[1,12.2,'R'],'\\':[1,13.2,'R'],
+    'a':[2,1.5,'L'],'s':[2,2.5,'L'],'d':[2,3.5,'L'],'f':[2,4.5,'L'],'g':[2,5.5,'L'],
+    'h':[2,6.5,'R'],'j':[2,7.5,'R'],'k':[2,8.5,'R'],'l':[2,9.5,'R'],';':[2,10.5,'R'],"'":[2,11.5,'R'],
+    'z':[3,2,'L'],'x':[3,3,'L'],'c':[3,4,'L'],'v':[3,5,'L'],'b':[3,6,'L'],
+    'n':[3,7,'R'],'m':[3,8,'R'],',':[3,9,'R'],'.':[3,10,'R'],'/':[3,11,'R'],
+    ' ':[4,6,'B'],
+  };
+
+  /**
+   * Calculate the finger travel time between two keys.
+   * Incorporates Euclidean distance, hand alternation, and row changes.
+   * Returns ms to add to inter-key delay.
+   */
+  function getFlightTime(fromChar, toChar) {
+    const a = KEY_POS[fromChar.toLowerCase()];
+    const b = KEY_POS[toChar.toLowerCase()];
+    if (!a || !b) return 0;
+
+    const dx = b[1] - a[1];
+    const dy = b[0] - a[0];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Same-hand vs cross-hand
+    const sameHand = a[2] === b[2] && a[2] !== 'B';
+    const crossHand = a[2] !== b[2] && a[2] !== 'B' && b[2] !== 'B';
+
+    // Same-hand same-row (fast roll), same-hand different row (slower),
+    // cross-hand (fast — hands move in parallel), space bar (thumb)
+    let factor;
+    if (sameHand && Math.abs(dy) < 0.6) factor = 28;      // same row roll
+    else if (sameHand) factor = 38;                         // same hand, row change
+    else if (crossHand) factor = 18;                        // cross-hand alternation (fast)
+    else factor = 25;                                       // default
+
+    return Math.round(dist * factor);
+  }
+
+  // ── Shift key simulation ────────────────────────────────────────
+
+  function simulateShiftKeyDown(element) {
+    element.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Shift', code: 'ShiftLeft', keyCode: 16, which: 16,
+      shiftKey: true, bubbles: true, cancelable: true, composed: true,
+    }));
+  }
+
+  function simulateShiftKeyUp(element) {
+    element.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Shift', code: 'ShiftLeft', keyCode: 16, which: 16,
+      shiftKey: false, bubbles: true, cancelable: true, composed: true,
+    }));
+  }
+
+  // ── Split keyDown / keyUp for rollover ──────────────────────────
+
+  /**
+   * Dispatch keydown + keypress + DOM insert + input for a character.
+   * Does NOT dispatch keyup — caller handles that for rollover overlap.
+   * Returns keyInfo so caller can dispatch matching keyup later.
+   */
+  function simulateKeyDown(element, char) {
+    const keyInfo = getKeyInfo(char);
+
+    if (document.activeElement !== element) element.focus();
+
+    // Shift key simulation
+    const needsShift = keyInfo.shiftKey;
+    if (needsShift) simulateShiftKeyDown(element);
+
+    element.dispatchEvent(buildBeforeInputEvent('insertText', char));
+    element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
+    element.dispatchEvent(buildKeyEvent('keypress', keyInfo));
+    insertText(element, char);
+    element.dispatchEvent(buildInputEvent('insertText', char, element));
+
+    return keyInfo; // caller uses this for keyup
+  }
+
+  /**
+   * Dispatch keyup for a previously dispatched keydown.
+   */
+  function simulateKeyUp(element, keyInfo) {
+    element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
+
+    // Release shift if it was used
+    if (keyInfo.shiftKey) simulateShiftKeyUp(element);
+
+    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+  }
+
   // ── QWERTY adjacent-key map (used by human-model.js) ─────────────
 
   /**
@@ -434,8 +535,13 @@ const KeyEvents = (() => {
   return {
     getKeyInfo,
     simulateKeyPress,
+    simulateKeyDown,
+    simulateKeyUp,
     simulateBackspace,
     simulateCtrlBackspace,
+    simulateShiftKeyDown,
+    simulateShiftKeyUp,
+    getFlightTime,
     QWERTY_NEIGHBORS,
   };
 })();

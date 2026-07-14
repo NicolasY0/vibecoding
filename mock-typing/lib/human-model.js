@@ -127,10 +127,18 @@ class HumanModel {
       }
     }
 
+    // ── Flight time (keyboard distance) ──
+    // Finger travel time between physical key positions.
+    // This models the reality that 'a'→'p' takes longer than 'a'→'s'.
+    if (prevChar && /[a-zA-Z0-9 ,.;]/.test(prevChar) && /[a-zA-Z0-9 ,.;]/.test(char)) {
+      const flight = KeyEvents.getFlightTime(prevChar, char);
+      baseInterval += flight;
+    }
+
     // ── Case switching slowdown ──
     // Shift-modified keys take slightly longer
     if (char !== char.toLowerCase() && char === char.toUpperCase() && /[a-zA-Z]/.test(char)) {
-      baseInterval *= 1.12;
+      baseInterval *= 1.15;
     }
 
     // ── Burst micro-rhythm ──
