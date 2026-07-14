@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock Typing</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <h1>🤖 Mock Typing</h1>
+      <span class="subtitle">Human-like text input simulator</span>
+    </header>
+
+    <!-- Text input -->
+    <section class="section">
+      <label class="label" for="target-text">Target Text</label>
+      <textarea
+        id="target-text"
+        class="text-input"
+        placeholder="Paste or type the text you want to simulate typing..."
+        rows="6"
+      ></textarea>
+      <div class="char-count">
+        <span id="char-count">0</span> characters
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="section">
+      <label class="label">Settings</label>
+
+      <div class="setting-row">
+        <div class="setting-header">
+          <span>Typing Speed</span>
+          <span class="setting-value" id="wpm-value">60 WPM</span>
+        </div>
+        <input type="range" id="wpm" class="slider" min="20" max="120" value="60" step="5">
+        <div class="range-labels">
+          <span>Slow</span>
+          <span>Fast</span>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-header">
+          <span>Error Rate</span>
+          <span class="setting-value" id="error-value">2%</span>
+        </div>
+        <input type="range" id="error-rate" class="slider" min="0" max="10" value="2" step="1">
+        <div class="range-labels">
+          <span>Perfect</span>
+          <span>Sloppy</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section class="section controls-section">
+      <div class="btn-row">
+        <button id="btn-start" class="btn btn-start" title="Start typing (Ctrl+Enter)">
+          ▶ Start
+        </button>
+        <button id="btn-pause" class="btn btn-pause" title="Pause / Resume" disabled>
+          ⏸ Pause
+        </button>
+        <button id="btn-stop" class="btn btn-stop" title="Stop" disabled>
+          ⏹ Stop
+        </button>
+      </div>
+    </section>
+
+    <!-- Progress -->
+    <section class="section progress-section" id="progress-section" style="display:none;">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-info">
+        <span id="progress-text">0 / 0</span>
+        <span class="status-badge" id="status-badge">IDLE</span>
+      </div>
+    </section>
+
+    <!-- Presets -->
+    <section class="section presets-section">
+      <label class="label">Quick Presets</label>
+      <div class="preset-chips">
+        <button class="chip" data-wpm="40" data-error="1">🐢 Casual (40wpm, 1%)</button>
+        <button class="chip" data-wpm="60" data-error="2">🧑 Normal (60wpm, 2%)</button>
+        <button class="chip" data-wpm="85" data-error="4">🏃 Fast (85wpm, 4%)</button>
+        <button class="chip" data-wpm="100" data-error="6">⚡ Turbo (100wpm, 6%)</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
