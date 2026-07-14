@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitHub 名片查询器</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #238636;
+    --green-hover: #2ea043;
+    --danger: #f85149;
+    --radius: 12px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 60px 20px 40px;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 460px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+  }
+
+  /* ── Header ── */
+  .header {
+    text-align: center;
+  }
+
+  .header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .header p {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── Search ── */
+  .search-bar {
+    display: flex;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .search-bar input {
+    flex: 1;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .search-bar input::placeholder {
+    color: var(--muted);
+    opacity: 0.7;
+  }
+
+  .search-bar input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+  }
+
+  .search-bar button {
+    padding: 10px 20px;
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    white-space: nowrap;
+  }
+
+  .search-bar button:hover:not(:disabled) {
+    background: var(--green-hover);
+  }
+
+  .search-bar button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ── Status message ── */
+  .status {
+    width: 100%;
+    text-align: center;
+    padding: 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    display: none;
+  }
+
+  .status.show { display: block; }
+
+  .status.loading {
+    background: rgba(88, 166, 255, 0.08);
+    border: 1px solid rgba(88, 166, 255, 0.2);
+    color: var(--accent);
+  }
+
+  .status.error {
+    background: rgba(248, 81, 73, 0.08);
+    border: 1px solid rgba(248, 81, 73, 0.2);
+    color: var(--danger);
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(88, 166, 255, 0.3);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Card ── */
+  .card {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px 28px;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+    animation: fadeUp 0.35s ease;
+  }
+
+  .card.show { display: flex; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .avatar {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: 3px solid var(--accent);
+    object-fit: cover;
+    background: var(--border);
+  }
+
+  .card .name {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .card .login {
+    font-size: 15px;
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .card .login:hover {
+    text-decoration: underline;
+  }
+
+  .card .bio {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+    max-width: 340px;
+  }
+
+  .card .bio:empty { display: none; }
+
+  /* ── Stats ── */
+  .stats {
+    display: flex;
+    gap: 32px;
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    width: 100%;
+    justify-content: center;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .stat .num {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .stat .label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Footer note ── */
+  .note {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🐙 GitHub 名片查询器</h1>
+    <p>输入 GitHub 用户名，查看用户名片</p>
+  </div>
+
+  <div class="search-bar">
+    <input
+      id="username"
+      type="text"
+      placeholder="输入 GitHub 用户名，如 octocat"
+      autocomplete="off"
+      spellcheck="false"
+    >
+    <button id="btn-query">🔍 查询</button>
+  </div>
+
+  <!-- Loading / Error messages -->
+  <div class="status" id="status"></div>
+
+  <!-- Result card -->
+  <div class="card" id="card">
+    <img class="avatar" id="avatar" src="" alt="avatar" loading="lazy">
+    <h2 class="name" id="name"></h2>
+    <a class="login" id="login" href="#" target="_blank" rel="noopener"></a>
+    <p class="bio" id="bio"></p>
+    <div class="stats">
+      <div class="stat">
+        <span class="num" id="repos">0</span>
+        <span class="label">Public Repos</span>
+      </div>
+      <div class="stat">
+        <span class="num" id="followers">0</span>
+        <span class="label">Followers</span>
+      </div>
+      <div class="stat">
+        <span class="num" id="following">0</span>
+        <span class="label">Following</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">数据来自 <a href="https://docs.github.com/en/rest" target="_blank" rel="noopener" style="color:var(--accent)">GitHub REST API</a>，无需 Token</p>
+</div>
+
+<script>
+  const input = document.getElementById('username');
+  const btn = document.getElementById('btn-query');
+  const statusEl = document.getElementById('status');
+  const card = document.getElementById('card');
+  const avatar = document.getElementById('avatar');
+  const nameEl = document.getElementById('name');
+  const loginEl = document.getElementById('login');
+  const bioEl = document.getElementById('bio');
+  const reposEl = document.getElementById('repos');
+  const followersEl = document.getElementById('followers');
+  const followingEl = document.getElementById('following');
+
+  // ── Set status ──
+  function showStatus(type, message) {
+    statusEl.className = 'status show ' + type;
+    statusEl.innerHTML = message;
+  }
+
+  function hideStatus() {
+    statusEl.className = 'status';
+    statusEl.innerHTML = '';
+  }
+
+  // ── Set loading ──
+  function setLoading(loading) {
+    btn.disabled = loading;
+    btn.innerHTML = loading
+      ? '<span class="spinner"></span>查询中…'
+      : '🔍 查询';
+    card.classList.remove('show');
+    hideStatus();
+  }
+
+  // ── Render card ──
+  function renderCard(user) {
+    avatar.src = user.avatar_url || '';
+    avatar.alt = user.login + "'s avatar";
+    nameEl.textContent = user.name || user.login;
+    loginEl.textContent = '@' + user.login;
+    loginEl.href = user.html_url || '#';
+    bioEl.textContent = user.bio || '';
+    reposEl.textContent = (user.public_repos ?? 0).toLocaleString();
+    followersEl.textContent = (user.followers ?? 0).toLocaleString();
+    followingEl.textContent = (user.following ?? 0).toLocaleString();
+    card.classList.add('show');
+  }
+
+  // ── Query ──
+  async function query() {
+    const username = input.value.trim();
+    if (!username) {
+      input.focus();
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const res = await fetch('https://api.github.com/users/' + encodeURIComponent(username), {
+        headers: { 'Accept': 'application/vnd.github+json' },
+      });
+
+      if (res.ok) {
+        const user = await res.json();
+        renderCard(user);
+      } else if (res.status === 404) {
+        showStatus('error', '❌ 用户不存在，请检查拼写');
+      } else if (res.status === 403 && res.headers.get('X-RateLimit-Remaining') === '0') {
+        showStatus('error', '⚠️ API 请求次数已用完，请稍后再试');
+      } else {
+        showStatus('error', '❌ 网络异常，稍后再试');
+      }
+    } catch (err) {
+      showStatus('error', '❌ 网络异常，稍后再试');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '🔍 查询';
+    }
+  }
+
+  // ── Events ──
+  btn.addEventListener('click', query);
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') query();
+  });
+</script>
+</body>
+</html>
