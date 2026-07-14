@@ -13,7 +13,7 @@
   if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage) return;
 
   // Allow a tiny settle delay for SPA pages to finish hydration
-  const SETTLE_MS = 100;
+  const SETTLE_MS = 300;
 
   // ── State ──
   let engine = null;
@@ -182,8 +182,10 @@
     } catch (_) {}
 
     try {
+      // Broad search: standard inputs + ARIA roles used by Google/Baidu/DeepL etc.
       const inputs = document.querySelectorAll(
-        'input[type="text"], input:not([type]), textarea, [contenteditable="true"]'
+        'input[type="text"], input:not([type]), textarea, ' +
+        '[contenteditable="true"], [role="textbox"], [role="combobox"]'
       );
       for (const el of inputs) {
         if (isVisible(el) && isEditable(el)) return el;
@@ -205,6 +207,11 @@
       }
       if (tag === 'textarea') return true;
       if (el.isContentEditable) return true;
+      // Google Translate / modern SPA inputs use ARIA roles
+      const role = el.getAttribute('role');
+      if (role === 'textbox' || role === 'combobox' || role === 'searchbox') {
+        return tag === 'textarea' || tag === 'input' || el.isContentEditable;
+      }
     } catch (_) {}
     return false;
   }

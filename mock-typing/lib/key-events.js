@@ -2,12 +2,41 @@
  * key-events.js — Realistic keyboard event generation.
  *
  * Every character typed produces a full event cascade:
- *   keydown → keypress → (DOM mutation) → input → keyup
+ *   beforeinput → keydown → keypress → (DOM mutation) → input → keyup
  *
  * Supports <input>, <textarea>, and contenteditable elements.
+ * Uses native value setter for React/Angular-controlled inputs.
  */
 
 const KeyEvents = (() => {
+  // ── Native value setters (bypass framework overrides) ────────────
+
+  const nativeTextareaSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value'
+  )?.set;
+
+  const nativeInputSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  )?.set;
+
+  /**
+   * Set an input/textarea's value using the native setter,
+   * which triggers React/Angular/Vue change detection.
+   */
+  function setNativeValue(element, value) {
+    const tag = element.tagName?.toLowerCase();
+    if (tag === 'textarea' && nativeTextareaSetter) {
+      nativeTextareaSetter.call(element, value);
+    } else if (tag === 'input' && nativeInputSetter) {
+      nativeInputSetter.call(element, value);
+    } else {
+      // Fallback: direct assignment (works for vanilla JS, contenteditable)
+      element.value = value;
+    }
+    // Some frameworks also need the 'change' event
+    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+  }
+
   // ── Key metadata lookup ──────────────────────────────────────────
 
   /**
@@ -126,7 +155,17 @@ const KeyEvents = (() => {
 
   function buildInputEvent(inputType, data, target) {
     return new InputEvent('input', {
-      data: data,
+      data: data || null,
+      inputType: inputType,
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+  }
+
+  function buildBeforeInputEvent(inputType, data) {
+    return new InputEvent('beforeinput', {
+      data: data || null,
       inputType: inputType,
       bubbles: true,
       cancelable: true,
@@ -141,24 +180,46 @@ const KeyEvents = (() => {
    */
   function insertText(element, text) {
     if (element.isContentEditable) {
-      // contenteditable
+      // contenteditable — focus first to ensure selection is valid
+      if (document.activeElement !== element) {
+        element.focus();
+      }
       const sel = window.getSelection();
-      if (sel.rangeCount) {
-        const range = sel.getRangeAt(0);
-        range.deleteContents();
-        range.insertNode(document.createTextNode(text));
-        // Move cursor after inserted text
-        range.setStartAfter(range.endContainer);
-        range.collapse(true);
+      if (!sel.rangeCount) {
+        // No selection range — create one at the end of the element
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        range.collapse(false);
         sel.removeAllRanges();
         sel.addRange(range);
       }
+      const range = sel.getRangeAt(0);
+      // Ensure the range is within the target element
+      if (!element.contains(range.commonAncestorContainer)) {
+        // Reset range to start of element
+        const newRange = document.createRange();
+        newRange.selectNodeContents(element);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        range.setStart(newRange.startContainer, newRange.startOffset);
+        range.setEnd(newRange.startContainer, newRange.startOffset);
+      }
+      range.deleteContents();
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      // Move cursor after inserted text
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
     } else {
-      // <input> / <textarea>
-      const start = element.selectionStart;
-      const end = element.selectionEnd;
-      const val = element.value;
-      element.value = val.slice(0, start) + text + val.slice(end);
+      // <input> / <textarea> — use native setter for React/Angular
+      const start = element.selectionStart ?? 0;
+      const end = element.selectionEnd ?? start;
+      const val = element.value || '';
+      const newVal = val.slice(0, start) + text + val.slice(end);
+      setNativeValue(element, newVal);
       // Move cursor after inserted text
       const newPos = start + text.length;
       element.setSelectionRange(newPos, newPos);
@@ -170,12 +231,20 @@ const KeyEvents = (() => {
    */
   function deleteText(element, count) {
     if (element.isContentEditable) {
+      if (document.activeElement !== element) {
+        element.focus();
+      }
       const sel = window.getSelection();
       if (sel.rangeCount) {
         const range = sel.getRangeAt(0);
-        for (let i = 0; i < count && range.startOffset > 0; i++) {
-          // Extend backward by one character
-          range.setStart(range.startContainer, Math.max(0, range.startOffset - 1));
+        for (let i = 0; i < count; i++) {
+          try {
+            if (range.startOffset > 0) {
+              range.setStart(range.startContainer, range.startOffset - 1);
+            } else if (range.startContainer.previousSibling) {
+              range.setStartBefore(range.startContainer.previousSibling);
+            }
+          } catch (_) { break; }
         }
         range.deleteContents();
         range.collapse(true);
@@ -183,10 +252,11 @@ const KeyEvents = (() => {
         sel.addRange(range);
       }
     } else {
-      const start = element.selectionStart;
-      const val = element.value;
+      const start = element.selectionStart ?? 0;
+      const val = element.value || '';
       const delStart = Math.max(0, start - count);
-      element.value = val.slice(0, delStart) + val.slice(start);
+      const newVal = val.slice(0, delStart) + val.slice(start);
+      setNativeValue(element, newVal);
       element.setSelectionRange(delStart, delStart);
     }
   }
@@ -199,6 +269,14 @@ const KeyEvents = (() => {
    */
   function simulateKeyPress(element, char) {
     const keyInfo = getKeyInfo(char);
+
+    // Ensure element has focus (React/Angular listeners are bound to focused element)
+    if (document.activeElement !== element) {
+      element.focus();
+    }
+
+    // 0. beforeinput (modern frameworks listen for this)
+    element.dispatchEvent(buildBeforeInputEvent('insertText', char));
 
     // 1. keydown
     element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
@@ -215,8 +293,14 @@ const KeyEvents = (() => {
     // 5. keyup
     element.dispatchEvent(buildKeyEvent('keyup', keyInfo));
 
-    // Also dispatch a change-like event for frameworks (React, Vue, etc.)
-    // React listens to the `input` event's target.value, so the DOM mutation above covers it.
+    // 6. Also dispatch change event (some frameworks debounce on this)
+    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+
+    // 7. For React 18+ — trigger the framework's synthetic event system
+    // by also dispatching via the element's native event handler
+    if (typeof element.oninput === 'function') {
+      try { element.oninput(buildInputEvent('insertText', char)); } catch (_) {}
+    }
 
     return keyInfo;
   }
@@ -226,6 +310,9 @@ const KeyEvents = (() => {
    * Dispatches: keydown → (DOM delete) → input → keyup   (× count)
    */
   function simulateBackspace(element, count = 1) {
+    if (document.activeElement !== element) {
+      element.focus();
+    }
     for (let i = 0; i < count; i++) {
       const keyInfo = {
         key: 'Backspace',
@@ -236,6 +323,9 @@ const KeyEvents = (() => {
         shiftKey: false,
         ctrlKey: false,
       };
+
+      // beforeinput
+      element.dispatchEvent(buildBeforeInputEvent('deleteContentBackward', null));
 
       // keydown
       element.dispatchEvent(buildKeyEvent('keydown', keyInfo));
