@@ -21,10 +21,22 @@
         id="target-text"
         class="text-input"
         placeholder="Paste or type the text you want to simulate typing..."
-        rows="6"
+        rows="5"
       ></textarea>
-      <div class="char-count">
-        <span id="char-count">0</span> characters
+      <div class="input-actions">
+        <span class="char-count"><span id="char-count">0</span> chars</span>
+        <button id="btn-generate" class="btn-generate" title="Generate random text">
+          🎲 Random Text
+        </button>
+      </div>
+      <!-- Generate categories -->
+      <div class="gen-categories" id="gen-categories">
+        <button class="gen-chip" data-genre="essay">📝 Essay</button>
+        <button class="gen-chip" data-genre="chinese">🀄 中文</button>
+        <button class="gen-chip" data-genre="code">💻 Code</button>
+        <button class="gen-chip" data-genre="lorem">📄 Lorem</button>
+        <button class="gen-chip" data-genre="social">💬 Social</button>
+        <button class="gen-chip" data-genre="business">💼 Business</button>
       </div>
     </section>
 
