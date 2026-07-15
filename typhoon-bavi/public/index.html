@@ -341,8 +341,20 @@ function normalize(raw) {
 }
 
 function fetchData(cb) {
+  tryDirect(JMA_URL, function(err, data) {
+    if (!err) { cb(null, data); return; }
+    // CORS fallback: try via proxy
+    var proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(JMA_URL);
+    tryDirect(proxyUrl, function(err2, data2) {
+      if (!err2) { cb(null, data2); return; }
+      cb(new Error('网络异常（直连与代理均失败）'));
+    });
+  });
+}
+
+function tryDirect(url, cb) {
   var xhr = new XMLHttpRequest();
-  xhr.open('GET', JMA_URL, true);
+  xhr.open('GET', url, true);
   xhr.timeout = 15000;
   xhr.onload = function() {
     if (xhr.status >= 200 && xhr.status < 300) {
