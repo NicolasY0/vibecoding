@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="renderer" content="webkit">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+<title>巴威 BAVI — 台风实时监测</title>
+<style>
+:root {
+  --bg-0: #f5f7fa; --bg-1: #fff; --bg-2: #fff; --bg-3: #f0f2f5;
+  --line: #e0e6ec; --line-soft: #eef1f5; --text-0: #1a1a2e; --text-1: #4a5568;
+  --text-2: #8895a7; --text-3: #b0bcc9; --accent: #1890ff; --accent-2: #096dd9;
+  --warn: #fa8c16; --danger: #e6312c; --safe: #52c41a; --shadow: 0 2px 8px rgba(0,0,0,0.06);
+  --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg-0); color: var(--text-0);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; }
+
+.app { min-height: 100vh; background: linear-gradient(180deg, var(--bg-0) 0%, #eef2f7 100%); }
+
+.header { border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.92); padding: 18px 24px 14px; position: sticky; top: 0; z-index: 50; backdrop-filter: blur(8px); box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+.header-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; max-width: 1280px; margin: 0 auto; }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 11px; letter-spacing: 0.05em; }
+.brand-title { font-size: 12px; color: var(--text-2); letter-spacing: 0.1em; text-transform: uppercase; }
+.brand-name { font-size: 13px; color: var(--text-1); }
+.storm-title { display: flex; align-items: baseline; gap: 12px; }
+.storm-name-cn { font-size: 30px; font-weight: 800; color: var(--text-0); }
+.storm-name-en { font-size: 16px; font-weight: 600; color: var(--text-2); letter-spacing: 0.1em; }
+.storm-seq { font-size: 13px; color: var(--accent); border: 1px solid rgba(24,144,255,0.3); padding: 2px 10px; border-radius: 100px; background: rgba(24,144,255,0.06); }
+.header-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 12px; color: var(--text-2); }
+.header-desc { max-width: 1280px; margin: 10px auto 0; font-size: 12px; color: var(--text-2); line-height: 1.7; }
+
+.status-grid { max-width: 1280px; margin: 18px auto 0; padding: 0 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.status-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; position: relative; overflow: hidden; box-shadow: var(--shadow); }
+.status-card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.status-card.warn::before { background: linear-gradient(90deg, var(--warn), var(--danger)); }
+.status-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.status-dot { width: 6px; height: 6px; border-radius: 100%; background: var(--accent); box-shadow: 0 0 6px rgba(24,144,255,0.4); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.status-value { font-size: 28px; font-weight: 700; color: var(--text-0); display: flex; align-items: baseline; gap: 6px; }
+.status-value .unit { font-size: 13px; font-weight: 500; color: var(--text-2); }
+.status-sub { font-size: 12px; color: var(--text-2); }
+.status-sub .hl { color: var(--accent); font-weight: 600; }
+
+.main { max-width: 1280px; margin: 18px auto 0; padding: 0 24px 60px; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
+.section { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.section-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.section-title { font-size: 14px; font-weight: 600; color: var(--text-0); display: flex; align-items: center; gap: 8px; }
+.section-title .dot { width: 8px; height: 8px; border-radius: 100%; background: var(--accent); box-shadow: 0 0 4px rgba(24,144,255,0.4); }
+.section-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+.map-wrap { position: relative; width: 100%; height: 540px; background: #d4e6f1; overflow: hidden; }
+.map-wrap canvas { display: block; width: 100%; height: 100%; }
+.legend { position: absolute; bottom: 12px; left: 12px; background: rgba(255,255,255,0.92); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 11px; color: var(--text-1); display: flex; flex-direction: column; gap: 4px; z-index: 1000; backdrop-filter: blur(6px); }
+.legend-row { display: flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 14px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
+.info-list { display: flex; flex-direction: column; gap: 8px; }
+.info-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13px; }
+.info-row:first-child { border-top: 0; }
+.info-row .label { color: var(--text-2); }
+.info-row .val { color: var(--text-0); font-weight: 600; text-align: right; }
+
+.timeline { display: flex; flex-direction: column; gap: 8px; }
+.timeline-row { display: grid; grid-template-columns: 80px 1fr 1fr 1fr 1fr; gap: 10px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-3); font-size: 12px; align-items: center; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.timeline-row:hover { border-color: var(--accent); background: rgba(24,144,255,0.04); }
+.timeline-row.current { border-color: var(--danger); background: rgba(230,49,44,0.04); }
+.timeline-row.active { border-color: var(--accent); background: rgba(24,144,255,0.08); }
+.timeline-time { color: var(--text-1); font-weight: 600; }
+.timeline-time .sub { display: block; font-size: 10px; color: var(--text-3); font-weight: 400; }
+.timeline-cell { display: flex; flex-direction: column; }
+.timeline-cell .v { color: var(--text-0); font-weight: 600; }
+.timeline-cell .k { color: var(--text-3); font-size: 10px; }
+.timeline-empty { text-align: center; color: var(--text-3); padding: 14px; font-size: 12px; }
+
+.text-list { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.text-list-row { display: grid; grid-template-columns: 70px 80px 1fr; gap: 10px; padding: 6px 8px; border-radius: 4px; background: var(--bg-3); border: 1px solid var(--line); cursor: pointer; }
+.text-list-row.sel { border-color: var(--accent); }
+.text-list-row .t { color: var(--text-1); font-weight: 600; }
+.text-list-row .cls { color: var(--accent-2); }
+.text-list-row .pos { color: var(--text-1); text-align: right; }
+
+.advisory { display: flex; flex-direction: column; gap: 6px; }
+.advisory-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-3); font-size: 12px; }
+.advisory-row .ttl { color: var(--text-0); font-weight: 600; }
+.advisory-row .ts { color: var(--text-3); font-size: 10px; }
+.advisory-row .btn { color: var(--accent); border: 1px solid rgba(24,144,255,0.35); padding: 3px 10px; border-radius: 100px; font-size: 11px; background: rgba(24,144,255,0.04); white-space: nowrap; }
+.advisory-row .btn:hover { background: rgba(24,144,255,0.1); text-decoration: none; }
+
+.tips { background: rgba(250,140,22,0.06); border: 1px solid rgba(250,140,22,0.2); border-radius: 6px; padding: 10px 12px; font-size: 12px; color: var(--text-1); line-height: 1.7; }
+.tips strong { color: var(--warn); }
+
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn-primary { background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; font-size: 12px; font-weight: 700; box-shadow: 0 2px 8px rgba(24,144,255,0.25); transition: transform 0.1s; }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(24,144,255,0.35); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+.btn-ghost { background: var(--bg-1); color: var(--text-1); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font-size: 12px; transition: border-color 0.15s, color 0.15s; }
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.countdown { font-size: 12px; color: var(--text-1); display: flex; align-items: center; gap: 6px; }
+.countdown .v { color: var(--accent); font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.stale-banner { background: rgba(230,49,44,0.06); border: 1px solid rgba(230,49,44,0.25); border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--danger); display: flex; align-items: center; gap: 8px; }
+.empty-card { padding: 40px 16px; text-align: center; color: var(--text-3); font-size: 13px; }
+.disclaimer { max-width: 1280px; margin: 0 auto; padding: 12px 24px 30px; color: var(--text-3); font-size: 11px; text-align: center; border-top: 1px solid var(--line); }
+
+.side { display: flex; flex-direction: column; gap: 16px; }
+.main-wide { grid-template-columns: 1fr !important; }
+
+@media (max-width: 1024px) {
+  .main { grid-template-columns: 1fr; }
+  .status-grid { grid-template-columns: repeat(2, 1fr); }
+  .map-wrap { height: 360px; }
+}
+@media (max-width: 640px) {
+  .status-grid { grid-template-columns: 1fr 1fr; }
+  .storm-name-cn { font-size: 24px; }
+  .header { padding: 14px 16px 10px; }
+  .main { padding: 0 12px 40px; }
+  .status-grid { padding: 0 12px; }
+  .timeline-row { grid-template-columns: 70px 1fr 1fr 1fr 1fr; font-size: 11px; padding: 6px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="header">
+  <div class="header-row">
+    <div class="brand">
+      <div class="brand-logo">BAVI</div>
+      <div>
+        <div class="brand-title">Typhoon Watch · 台风监测</div>
+        <div class="brand-name">公开数据 · 仅供信息参考</div>
+      </div>
+    </div>
+    <div class="storm-title">
+      <span class="storm-name-cn">巴威</span>
+      <span class="storm-name-en">BAVI</span>
+      <span class="storm-seq" id="storm-class">--</span>
+    </div>
+    <div class="header-meta">
+      <div>数据来源: <a href="https://www.data.jma.go.jp/multi/cyclone/" target="_blank" rel="noopener">日本气象厅 JMA</a></div>
+      <div id="header-time">JMA 发布: --</div>
+    </div>
+  </div>
+  <div class="header-desc">
+    本页面每 5 分钟自动从日本气象厅同步一次"巴威"当前位置、中心气压、最大风速、未来 120 小时路径、概率圈与风圈半径。
+  </div>
+</header>
+
+<div class="status-grid">
+  <div class="status-card"><div class="status-label"><span class="status-dot"></span>中心气压</div><div class="status-value" id="sc-pressure">--<span class="unit">hPa</span></div><div class="status-sub">JMA 实况 / 预报值</div></div>
+  <div class="status-card" id="sc-wind-card"><div class="status-label">最大风速</div><div class="status-value" id="sc-wind">--<span class="unit">m/s</span></div><div class="status-sub" id="sc-beaufort">--</div></div>
+  <div class="status-card"><div class="status-label">强度等级</div><div class="status-value" style="font-size:18px" id="sc-class">--</div><div class="status-sub" id="sc-move">移向: -- · 移速: -- km/h</div></div>
+  <div class="status-card"><div class="status-label">发布时间 / 倒计时</div><div class="status-value" style="font-size:18px" id="sc-target">--</div><div class="status-sub">下次刷新 <span class="hl" id="sc-countdown">--</span></div></div>
+</div>
+
+<div class="main">
+  <section class="section">
+    <div class="section-head">
+      <div class="section-title"><span class="dot"></span>实时路径</div>
+      <div class="toolbar">
+        <span class="countdown">刷新 <span class="v" id="tb-countdown">--</span></span>
+        <button class="btn-primary" id="btn-refresh" onclick="refresh(true)">立即刷新</button>
+      </div>
+    </div>
+    <div id="error-area" style="display:none;padding:8px 16px 0"></div>
+    <div class="map-wrap" id="map-container"><canvas id="map-canvas"></canvas>
+      <div class="legend">
+        <div class="legend-row"><span class="legend-swatch" style="background:#e6312c;border-radius:100%"></span>台风中心 (实况)</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:#1890ff"></span>预报点</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:rgba(250,140,22,0.15);border:1px dashed rgba(250,140,22,0.6)"></span>70% 概率圈</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:rgba(24,144,255,0.12);border:1px dashed rgba(24,144,255,0.5)"></span>强风圈 (30kt)</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:rgba(230,49,44,0.12);border:1px dashed rgba(230,49,44,0.55)"></span>暴风圈 (50kt)</div>
+      </div>
+    </div>
+    <div style="padding:8px 16px 16px"><div style="font-size:12px;color:var(--text-2);margin-bottom:6px">文字列表 (无障碍备援)</div><div class="text-list" id="text-list"></div></div>
+  </section>
+
+  <aside class="side">
+    <section class="section">
+      <div class="section-head"><div class="section-title"><span class="dot"></span><span id="info-title">实况详情</span></div><div style="font-size:11px;color:var(--text-2)" id="info-time"></div></div>
+      <div class="section-body"><div class="info-list" id="info-list"></div></div>
+    </section>
+  </aside>
+</div>
+
+<div class="main main-wide">
+  <section class="section">
+    <div class="section-head"><div class="section-title"><span class="dot"></span>强度趋势 (实况 + 120h 预报)</div></div>
+    <div class="section-body"><div class="timeline" id="timeline"></div></div>
+  </section>
+</div>
+
+<div class="main">
+  <section class="section">
+    <div class="section-head"><div class="section-title"><span class="dot"></span>官方预警入口</div></div>
+    <div class="section-body">
+      <div class="advisory">
+        <div class="advisory-row"><div><div class="ttl">应急管理部</div><div class="ts">官方权威信息发布渠道</div></div><a class="btn" href="https://www.mem.gov.cn/" target="_blank" rel="noopener">进入官网</a></div>
+        <div class="advisory-row"><div><div class="ttl">中央气象台</div><div class="ts">中国气象局 CMA · 台风公报与预警</div></div><a class="btn" href="http://www.nmc.cn/publish/typhoon/typhoon_new.html" target="_blank" rel="noopener">台风网</a></div>
+        <div class="advisory-row"><div><div class="ttl">国家预警发布</div><div class="ts">气象灾害预警 · 各省气象台汇总</div></div><a class="btn" href="https://www.12379.cn/" target="_blank" rel="noopener">国家预警</a></div>
+        <div class="advisory-row"><div><div class="ttl">JMA 多语言页 (实时)</div><div class="ts" id="jma-time">未获取到发布时间</div></div><a class="btn" href="https://www.data.jma.go.jp/multi/cyclone/cyclone_detail.html?id=61&lang=cn_zs" target="_blank" rel="noopener">JMA 中文</a></div>
+        <div class="advisory-row"><div><div class="ttl">JMA (历史/复核)</div><div class="ts">历史公报与最佳路径查询</div></div><a class="btn" href="https://www.jma.go.jp/jma/jma-eng/jma-center/rsmc-hp-pub-eg/besttrack.html" target="_blank" rel="noopener">Best Track</a></div>
+      </div>
+      <div class="tips">重要：中国境内的台风影响和风险等级，请以应急管理部、中央气象台与地方气象台正式预警为准。本页面数据来源于日本气象厅，仅供信息参考。</div>
+    </div>
+  </section>
+  <section class="section">
+    <div class="section-head"><div class="section-title"><span class="dot"></span>防灾提示</div></div>
+    <div class="section-body">
+      <div class="tips"><strong>关注预警：</strong>持续关注当地气象台的最新预报和预警信息。</div>
+      <div class="tips"><strong>远离危险：</strong>远离海边、河边、山区、低洼地带；停止高空、水上作业。</div>
+      <div class="tips"><strong>居家准备：</strong>提前检查门窗、电路与燃气；备好手电、饮水、药品和充电宝。</div>
+      <div class="tips"><strong>出行：</strong>受影响地区飞机、铁路、轮渡可能延误或取消。</div>
+      <div class="tips"><strong>紧急联络：</strong>紧急情况拨打 110/119/120；海上事故 118。</div>
+    </div>
+  </section>
+</div>
+
+<div class="disclaimer">
+  数据来自日本气象厅公开接口 <a href="https://www.data.jma.go.jp/multi/cyclone/" target="_blank" rel="noopener">JMA Cyclone Information</a>。仅供信息参考，请以当地主管部门正式预警为准。
+</div>
+
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// Data fetching & parsing (ported from lib/jma.ts + lib/cache.ts)
+// ═══════════════════════════════════════════════════════════════════
+
+var JMA_URL = 'https://www.data.jma.go.jp/multi/data/VPTW60/61_cn_zs.json';
+var REFRESH_MS = 5 * 60 * 1000;
+var STORM_ID = '61', STORM_NAME = '巴威', STORM_EN = 'BAVI', STORM_NUM = '2609';
+
+var cache = { data: null, fetchedAt: 0, inflight: null };
+var allPoints = []; // [{ ... NormalizedPoint }]
+var activeIndex = 0;
+var countdownMs = REFRESH_MS;
+var lastFetch = 0;
+var loading = true;
+var refreshing = false;
+
+function parseCoord(s) {
+  if (!s) return null;
+  var m = /^(-?\d+(?:\.\d+)?)([NSEW])$/i.exec(s.trim());
+  if (!m) return null;
+  var v = parseFloat(m[1]), d = m[2].toUpperCase();
+  return (d === 'S' || d === 'W') ? -v : v;
+}
+
+function jmaTimeToIso(s) {
+  if (!s) return null;
+  var m = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2})$/.exec(s.trim());
+  if (!m) return null;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 9, +m[5])).toISOString();
+}
+
+function toNumber(s) {
+  if (s == null) return null;
+  var n = parseFloat(String(s).trim());
+  return isNaN(n) ? null : n;
+}
+
+function classNameZh(cls) {
+  var map = { TY:'台风', STS:'强热带风暴', TS:'热带风暴', TD:'热带低压', LOW:'温带气旋/低压', Hurricane:'飓风' };
+  return map[cls] || cls;
+}
+
+function beaufortFromMs(ms) {
+  if (ms == null || isNaN(ms)) return null;
+  if (ms < 0.3) return 0; if (ms < 1.6) return 1; if (ms < 3.4) return 2;
+  if (ms < 5.5) return 3; if (ms < 8.0) return 4; if (ms < 10.8) return 5;
+  if (ms < 13.9) return 6; if (ms < 17.2) return 7; if (ms < 20.8) return 8;
+  if (ms < 24.5) return 9; if (ms < 28.5) return 10; if (ms < 32.7) return 11;
+  if (ms < 37.0) return 12; if (ms < 41.5) return 13; if (ms < 46.2) return 14;
+  if (ms < 51.0) return 15; if (ms < 56.1) return 16; return 17;
+}
+
+function normalize(raw) {
+  var infos = raw.meteorologicalInfos || [];
+  var targetDur = parseInt((raw.targetDuration || 'PT120H').replace(/[^0-9]/g, '')) || 120;
+  var issuedAt = jmaTimeToIso(raw.reportDateTime) || new Date().toISOString();
+  var targetAt = jmaTimeToIso(raw.targetDateTime) || new Date().toISOString();
+  var targetMs = new Date(targetAt).getTime();
+
+  var points = infos.map(function(info, i) {
+    var cp = info.centerPart || {}, wp = info.windPart || {}, cls = info.classPart || {};
+    var lat = null, lon = null, probRKm = null, probRNm = null;
+    if (i === 0) {
+      var c = { lat: parseCoord(cp.coordinateLat), lon: parseCoord(cp.coordinateLon) };
+      lat = c.lat != null ? c.lat : null; lon = c.lon != null ? c.lon : null;
+    } else {
+      var pc = cp.probabilityCircle;
+      if (pc) {
+        lat = parseCoord(pc.basePointLat); lon = parseCoord(pc.basePointLon);
+        if (pc.axis) { probRKm = toNumber(pc.axis.radiusKm); probRNm = toNumber(pc.axis.radiusNm); }
+      }
+    }
+    var w50 = (info.warningAreaPart50 || []).map(function(it) {
+      return { type: '50kt', direction: it.direction || 'ALL', radiusKm: toNumber(it.radiusKm), radiusNm: toNumber(it.radiusNm) };
+    }).filter(function(x) { return x.radiusKm != null || x.radiusNm != null; });
+    var w30 = (info.warningAreaPart30 || []).map(function(it) {
+      return { type: '30kt', direction: it.direction || 'ALL', radiusKm: toNumber(it.radiusKm), radiusNm: toNumber(it.radiusNm) };
+    }).filter(function(x) { return x.radiusKm != null || x.radiusNm != null; });
+
+    var timeUtc = jmaTimeToIso(info.dateTime) || new Date().toISOString();
+    var offsetMs = new Date(timeUtc).getTime() - targetMs;
+    return {
+      timeUtc: timeUtc, timeJst: info.dateTime,
+      type: i === 0 ? 'current' : 'forecast',
+      lat: lat, lon: lon,
+      probRadiusKm: probRKm, probRadiusNm: probRNm,
+      direction: cp.direction || null,
+      speedKt: toNumber(cp.speedKnot), speedKmh: toNumber(cp.speedKmH),
+      pressureHpa: toNumber(cp.pressure),
+      windKt: toNumber(wp.windSpeedKnot), windMs: toNumber(wp.windSpeedMS),
+      gustKt: toNumber(wp.windGustSpeedKnot), gustMs: toNumber(wp.windGustSpeedMS),
+      classCode: cls.typhoonClass || '', className: classNameZh(cls.typhoonClass || ''),
+      windRadii: w50.concat(w30),
+      offsetHours: Math.round(offsetMs / 3600000)
+    };
+  });
+
+  return {
+    ok: true, stale: false, fetchedAt: new Date().toISOString(),
+    source: { jma: JMA_URL, issuedAt: issuedAt, targetAt: targetAt, targetDurationH: targetDur },
+    storm: { id: STORM_ID, name: raw.name || STORM_EN, nameZh: STORM_NAME, number: raw.number || STORM_NUM, remark: raw.remark || '' },
+    current: points[0] || null,
+    forecast: points.slice(1),
+    windRadii: points[0] ? points[0].windRadii : []
+  };
+}
+
+function fetchData(cb) {
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', JMA_URL, true);
+  xhr.timeout = 15000;
+  xhr.onload = function() {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try { var raw = JSON.parse(xhr.responseText); cb(null, normalize(raw)); }
+      catch(e) { cb(new Error('解析失败')); }
+    } else { cb(new Error('HTTP ' + xhr.status)); }
+  };
+  xhr.onerror = function() { cb(new Error('网络异常')); };
+  xhr.ontimeout = function() { cb(new Error('请求超时')); };
+  xhr.send();
+}
+
+function loadData(manual, cb) {
+  if (manual) refreshing = true;
+  updateRefreshBtn();
+  fetchData(function(err, data) {
+    refreshing = false; loading = false;
+    updateRefreshBtn();
+    if (err) {
+      if (cache.data && !cache.data.stale) {
+        cache.data.stale = true;
+        cache.data.error = '更新失败: ' + err.message;
+      }
+      showError('请求异常: ' + err.message);
+    } else {
+      cache.data = data;
+      cache.fetchedAt = Date.now();
+      lastFetch = Date.now();
+      countdownMs = REFRESH_MS;
+      activeIndex = 0;
+      allPoints = data.current ? [data.current].concat(data.forecast) : [];
+      hideError();
+    }
+    if (cb) cb();
+    renderAll();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Rendering
+// ═══════════════════════════════════════════════════════════════════
+
+function formatJst(iso) {
+  if (!iso) return '--';
+  var d = new Date(new Date(iso).getTime() + 9*3600*1000);
+  if (isNaN(d.getTime())) return '--';
+  return d.getUTCFullYear() + '/' + pad(d.getUTCMonth()+1) + '/' + pad(d.getUTCDate()) + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' JST';
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function dirZh(d) {
+  if (!d) return '--';
+  var map = { N:'北', NNE:'北东北', NE:'东北', ENE:'东北东', E:'东', ESE:'东南东', SE:'东南', SSE:'南东南', S:'南', SSW:'南西南', SW:'西南', WSW:'西南西', W:'西', WNW:'西北西', NW:'西北', NNW:'北西北' };
+  return map[d.toUpperCase()] || d;
+}
+
+function beaufortText(bf) {
+  if (bf == null) return '--';
+  var labels = ['0级/静风','1级/软风','2级/轻风','3级/微风','4级/和风','5级/清风','6级/强风','7级/疾风','8级/大风','9级/烈风','10级/狂风','11级/暴风','12级/台风','13级','14级','15级','16级','17级'];
+  return labels[Math.min(bf, 17)];
+}
+
+function renderAll() {
+  renderStatusCards();
+  renderInfoPanel();
+  renderTimeline();
+  renderTextList();
+  renderMap();
+  updateCountdownDisplay();
+  updateHeaderTime();
+}
+
+var ap = null;
+function getActive() { return allPoints.length > 0 ? allPoints[Math.min(activeIndex, allPoints.length - 1)] : null; }
+
+function renderStatusCards() {
+  ap = getActive();
+  var bf = beaufortFromMs(ap && ap.windMs);
+  document.getElementById('sc-pressure').innerHTML = (ap && ap.pressureHpa != null ? ap.pressureHpa : '--') + '<span class="unit">hPa</span>';
+  document.getElementById('sc-wind').innerHTML = (ap && ap.windMs != null ? ap.windMs : '--') + '<span class="unit">m/s</span>';
+  document.getElementById('sc-beaufort').textContent = beaufortText(bf);
+  if (bf != null && bf >= 8) document.getElementById('sc-wind-card').classList.add('warn');
+  else document.getElementById('sc-wind-card').classList.remove('warn');
+  document.getElementById('sc-class').textContent = ap ? ap.className : '--';
+  document.getElementById('sc-move').innerHTML = '移向: ' + dirZh(ap && ap.direction) + ' · 移速: ' + (ap && ap.speedKmh != null ? ap.speedKmh : '--') + ' km/h';
+  document.getElementById('sc-target').textContent = cache.data && cache.data.source ? formatJst(cache.data.source.targetAt) : '--';
+  // Storm class badge
+  if (ap) document.getElementById('storm-class').textContent = ap.className;
+}
+
+function renderInfoPanel() {
+  ap = getActive();
+  document.getElementById('info-title').textContent = activeIndex === 0 ? '实况详情' : '+' + (ap ? ap.offsetHours : 0) + 'h 预报';
+  document.getElementById('info-time').textContent = ap ? formatJst(ap.timeUtc) : '';
+  var items = [];
+  if (!ap) { items.push('<div class="empty-card">暂无数据</div>'); }
+  else {
+    var rows = [
+      ['中心位置', (ap.lat != null ? ap.lat.toFixed(1) + '°N' : '--') + ' ' + (ap.lon != null ? ap.lon.toFixed(1) + '°E' : '--')],
+      ['移向 / 移速', dirZh(ap.direction) + ' · ' + (ap.speedKmh != null ? ap.speedKmh : '--') + ' km/h'],
+      ['中心气压', (ap.pressureHpa != null ? ap.pressureHpa : '--') + ' hPa'],
+      ['最大风速', (ap.windMs != null ? ap.windMs : '--') + ' m/s (' + (ap.windKt != null ? ap.windKt : '--') + ' kt)'],
+      ['最大阵风', (ap.gustMs != null ? ap.gustMs : '--') + ' m/s (' + (ap.gustKt != null ? ap.gustKt : '--') + ' kt)'],
+      ['强度等级', ap.className],
+      ['概率圈', ap.probRadiusKm ? ap.probRadiusKm + ' km' : '无'],
+      ['预报有效', formatJst(ap.timeUtc)]
+    ];
+    var wind30 = (cache.data && cache.data.windRadii || []).filter(function(w) { return w.type === '30kt'; });
+    var wind50 = (cache.data && cache.data.windRadii || []).filter(function(w) { return w.type === '50kt'; });
+    rows.push(['风圈 (30kt)', wind30.length ? wind30.map(function(w) { return (w.direction === 'ALL' ? '全域' : w.direction) + ' ' + (w.radiusKm || '--') + 'km'; }).join(' / ') : '无']);
+    rows.push(['暴风圈 (50kt)', wind50.length ? wind50.map(function(w) { return (w.direction === 'ALL' ? '全域' : w.direction) + ' ' + (w.radiusKm || '--') + 'km'; }).join(' / ') : '无']);
+    for (var i = 0; i < rows.length; i++) {
+      items.push('<div class="info-row"><span class="label">' + rows[i][0] + '</span><span class="val">' + rows[i][1] + '</span></div>');
+    }
+  }
+  document.getElementById('info-list').innerHTML = items.join('');
+}
+
+function renderTimeline() {
+  if (allPoints.length === 0) {
+    document.getElementById('timeline').innerHTML = '<div class="timeline-empty">暂无数据</div>';
+    return;
+  }
+  var head = '<div class="timeline-row" style="background:transparent;border-color:transparent;cursor:default">' +
+    '<span class="timeline-time"><span class="sub">时间 (JST)</span></span>' +
+    '<span class="timeline-cell"><span class="k">强度</span><span class="v" style="font-size:11px;color:var(--text-2)">类别</span></span>' +
+    '<span class="timeline-cell"><span class="k">风速</span><span class="v" style="font-size:11px;color:var(--text-2)">m/s</span></span>' +
+    '<span class="timeline-cell"><span class="k">气压</span><span class="v" style="font-size:11px;color:var(--text-2)">hPa</span></span>' +
+    '<span class="timeline-cell"><span class="k">移向 / 速</span><span class="v" style="font-size:11px;color:var(--text-2)">km/h</span></span>' +
+    '</div>';
+  var rows = allPoints.map(function(p, i) {
+    var cls = (i === 0 ? ' current' : '') + (i === activeIndex ? ' active' : '');
+    return '<div class="timeline-row' + cls + '" onclick="selectPoint(' + i + ')">' +
+      '<span class="timeline-time">' + (p.timeJst || '--') + '<span class="sub">' + (i === 0 ? '实况' : '+' + p.offsetHours + 'h') + '</span></span>' +
+      '<span class="timeline-cell"><span class="v">' + p.className + '</span></span>' +
+      '<span class="timeline-cell"><span class="v">' + (p.windMs != null ? p.windMs : '--') + '</span></span>' +
+      '<span class="timeline-cell"><span class="v">' + (p.pressureHpa != null ? p.pressureHpa : '--') + '</span></span>' +
+      '<span class="timeline-cell"><span class="v">' + dirZh(p.direction) + ' ' + (p.speedKmh != null ? p.speedKmh : '--') + '</span></span>' +
+      '</div>';
+  });
+  document.getElementById('timeline').innerHTML = head + rows.join('');
+}
+
+function renderTextList() {
+  if (allPoints.length === 0) { document.getElementById('text-list').innerHTML = '<div class="timeline-empty">暂无数据</div>'; return; }
+  var rows = allPoints.map(function(p, i) {
+    return '<div class="text-list-row' + (i === activeIndex ? ' sel' : '') + '" onclick="selectPoint(' + i + ')">' +
+      '<span class="t">' + (i === 0 ? '实况' : '+' + p.offsetHours + 'h') + '</span>' +
+      '<span class="cls">' + p.className + '</span>' +
+      '<span class="pos">' + (p.lat != null ? p.lat.toFixed(1) + '°N ' : '-- ') + (p.lon != null ? p.lon.toFixed(1) + '°E' : '--') + (p.probRadiusKm ? ' · 概率圈 ' + p.probRadiusKm + 'km' : '') + '</span>' +
+      '</div>';
+  });
+  document.getElementById('text-list').innerHTML = rows.join('');
+}
+
+function selectPoint(i) {
+  activeIndex = Math.min(i, allPoints.length - 1);
+  renderAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SVG-like Canvas Map
+// ═══════════════════════════════════════════════════════════════════
+
+var mapView = { minLon: 100, maxLon: 165, minLat: 0, maxLat: 55 };
+
+var LANDMASS = [
+  [[109,18.5],[110.5,21],[113,22.5],[115,22.8],[118,24.5],[120,26],[121.5,28],[122,30.5],[121,32],[121,33.5],[120,35],[120,37],[121,38],[122,39],[121,40],[119.5,40.8],[117.5,40.5],[115,41.5],[112,43],[108,44],[102,42],[97,42.5],[94,42],[88,47],[80,47],[75,41],[78,35.5],[80,32],[85,28],[88,27.5],[92,27],[95,25],[98,23],[100,22],[102,22.5],[105,22],[107,20.5],[108,18]],
+  [[108.5,19.5],[110,19],[111,19.5],[110.5,20.2],[109,20],[108.5,19.5]],
+  [[120,25.1],[121,25.3],[122,24.5],[121.5,22.5],[120.5,22],[120,23.5],[120,25.1]],
+  [[129.7,31],[130.5,31.5],[131.5,32],[131.8,33.5],[131,34],[130,33.5],[129.5,32.5],[129.7,31]],
+  [[130.5,33.5],[132,34],[134,34.5],[136,35],[138,35],[140,36],[141,38],[141.5,41],[142,43.5],[144,44],[145,44.5],[142,45.5],[140,41.5],[139,38],[137,36.5],[135,35.5],[132.5,35],[131,34.5],[130.5,33.5]],
+  [[140,41.5],[141,42],[144,42.5],[145.5,43.5],[144,44.5],[142,45],[140,44],[140,42.5],[140,41.5]],
+  [[125,38],[126,38.5],[128,39],[129,40.5],[129.5,42],[128,42.5],[126,42.5],[125,41],[124.5,39.5],[125,38]],
+  [[120,18],[121.5,17],[122.5,16],[123,14.5],[122,13.5],[121,13.5],[120,14],[119.5,15.5],[120,17],[120,18]],
+  [[141,46],[143,48],[142,50],[144,52.5],[146,54],[143,54.5],[141,50.5],[141,48],[141,46]],
+  [[155,53],[160,55],[162,57],[159,56],[156,54.5],[155,53]]
+];
+
+var CITIES = [
+  [116.4,39.9,'北京'],[121.5,31.2,'上海'],[113.3,23.1,'广州'],[121.6,25.1,'台北'],[114.2,22.3,'香港'],[108.9,34.3,'西安'],[104.1,30.7,'成都'],[120.2,30.3,'杭州'],[118.1,24.5,'厦门'],[110.3,20,'海口'],[109.5,18.2,'三亚'],[126.6,45.7,'哈尔滨'],[123.4,41.8,'沈阳'],[117.2,39.1,'天津'],[120.4,36.1,'青岛'],[129.5,35.5,'釜山'],[126.9,37.5,'首尔'],[139.7,35.7,'东京'],[135.5,34.6,'大阪'],[130.4,33.6,'福冈'],[121.0,14.6,'马尼拉']
+];
+
+function updateViewport() {
+  var valid = allPoints.filter(function(p) { return p.lat != null && p.lon != null; });
+  if (valid.length === 0) { mapView = { minLon: 100, maxLon: 165, minLat: 0, maxLat: 55 }; return; }
+  var minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (var i = 0; i < valid.length; i++) {
+    var p = valid[i];
+    if (p.probRadiusKm) {
+      var dLat = p.probRadiusKm / 111, dLon = p.probRadiusKm / (111 * Math.cos(p.lat * Math.PI / 180));
+      minLon = Math.min(minLon, p.lon - dLon); maxLon = Math.max(maxLon, p.lon + dLon);
+      minLat = Math.min(minLat, p.lat - dLat); maxLat = Math.max(maxLat, p.lat + dLat);
+    } else { minLon = Math.min(minLon, p.lon); maxLon = Math.max(maxLon, p.lon); minLat = Math.min(minLat, p.lat); maxLat = Math.max(maxLat, p.lat); }
+  }
+  var padLon = Math.max(8, (maxLon - minLon) * 0.4), padLat = Math.max(6, (maxLat - minLat) * 0.4);
+  mapView = {
+    minLon: Math.max(100, minLon - padLon), maxLon: Math.min(165, maxLon + padLon),
+    minLat: Math.max(0, minLat - padLat), maxLat: Math.min(55, maxLat + padLat)
+  };
+}
+
+function proj(lon, lat, w, h) {
+  var x = ((lon - mapView.minLon) / (mapView.maxLon - mapView.minLon)) * w;
+  var y = h - ((lat - mapView.minLat) / (mapView.maxLat - mapView.minLat)) * h;
+  return [x, y];
+}
+
+var animStart = Date.now();
+
+function renderMap() {
+  var container = document.getElementById('map-container');
+  var canvas = document.getElementById('map-canvas');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = container.getBoundingClientRect();
+  var w = rect.width, h = rect.height;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  updateViewport();
+
+  // Ocean
+  var grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#d4e6f1'); grad.addColorStop(1, '#c4dbed');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(180,195,210,0.5)'; ctx.lineWidth = 0.5; ctx.fillStyle = 'rgba(136,149,167,0.7)'; ctx.font = '9px sans-serif';
+  for (var lon = Math.ceil(mapView.minLon / 10) * 10; lon <= mapView.maxLon; lon += 10) {
+    var p1 = proj(lon, mapView.minLat, w, h), p2 = proj(lon, mapView.maxLat, w, h);
+    ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+    ctx.fillText(lon + '°E', p1[0] - 15, 12);
+  }
+  for (var lat = Math.ceil(mapView.minLat / 10) * 10; lat <= mapView.maxLat; lat += 10) {
+    var p1 = proj(mapView.minLon, lat, w, h), p2 = proj(mapView.maxLon, lat, w, h);
+    ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.fillText(lat + '°N', w - 4, p1[1] - 2); ctx.textAlign = 'start';
+  }
+
+  // Land
+  for (var i = 0; i < LANDMASS.length; i++) {
+    ctx.beginPath();
+    var ring = LANDMASS[i];
+    var pp = proj(ring[0][0], ring[0][1], w, h);
+    ctx.moveTo(pp[0], pp[1]);
+    for (var j = 1; j < ring.length; j++) { pp = proj(ring[j][0], ring[j][1], w, h); ctx.lineTo(pp[0], pp[1]); }
+    ctx.closePath();
+    ctx.fillStyle = '#f0ede8'; ctx.fill();
+    ctx.strokeStyle = '#d9d4cc'; ctx.lineWidth = 0.8; ctx.stroke();
+  }
+
+  // Cities
+  for (var k = 0; k < CITIES.length; k++) {
+    var c = CITIES[k];
+    if (c[0] >= mapView.minLon && c[0] <= mapView.maxLon && c[1] >= mapView.minLat && c[1] <= mapView.maxLat) {
+      var cp = proj(c[0], c[1], w, h);
+      ctx.beginPath(); ctx.arc(cp[0], cp[1], 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#8895a7'; ctx.fill();
+      ctx.fillStyle = 'rgba(74,85,104,0.8)'; ctx.fillText(c[2], cp[0] + 4, cp[1] - 4);
+    }
+  }
+
+  // Wind radii
+  for (var m = 0; m < allPoints.length; m++) {
+    var wp = allPoints[m];
+    if (wp.lat == null || wp.lon == null || !wp.windRadii) continue;
+    var wcp = proj(wp.lon, wp.lat, w, h);
+    for (var n = 0; n < wp.windRadii.length; n++) {
+      var r = wp.windRadii[n], rKm = r.radiusKm;
+      if (!rKm) continue;
+      var dLatW = rKm / 111, dLonW = rKm / (111 * Math.cos(wp.lat * Math.PI / 180));
+      var tl = proj(wp.lon - dLonW, wp.lat + dLatW, w, h), br = proj(wp.lon + dLonW, wp.lat - dLatW, w, h);
+      var rx = Math.abs(br[0] - tl[0]) / 2, ry = Math.abs(br[1] - tl[1]) / 2;
+      ctx.beginPath(); ctx.ellipse(wcp[0], wcp[1], rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = r.type === '50kt' ? 'rgba(230,49,44,0.12)' : 'rgba(24,144,255,0.1)';
+      ctx.fill();
+      ctx.strokeStyle = r.type === '50kt' ? 'rgba(230,49,44,0.55)' : 'rgba(24,144,255,0.5)';
+      ctx.lineWidth = 1.2; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+
+  // Probability circles
+  for (var a = 0; a < allPoints.length; a++) {
+    var ppa = allPoints[a];
+    if (ppa.lat == null || ppa.lon == null || !ppa.probRadiusKm) continue;
+    var dLatP = ppa.probRadiusKm / 111, dLonP = ppa.probRadiusKm / (111 * Math.cos(ppa.lat * Math.PI / 180));
+    var tlP = proj(ppa.lon - dLonP, ppa.lat + dLatP, w, h), brP = proj(ppa.lon + dLonP, ppa.lat - dLatP, w, h);
+    var cxP = (tlP[0] + brP[0]) / 2, cyP = (tlP[1] + brP[1]) / 2;
+    var rxP = Math.abs(brP[0] - tlP[0]) / 2, ryP = Math.abs(brP[1] - tlP[1]) / 2;
+    ctx.beginPath(); ctx.ellipse(cxP, cyP, rxP, ryP, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(250,140,22,0.08)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(250,140,22,0.6)'; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(250,140,22,0.85)'; ctx.fillText(ppa.probRadiusKm + 'km', cxP + rxP + 4, cyP);
+  }
+
+  // Paths
+  var validPts = allPoints.filter(function(p) { return p.lat != null && p.lon != null; });
+  if (validPts.length >= 2) {
+    // Real (first 2)
+    var rp1 = proj(validPts[0].lon, validPts[0].lat, w, h), rp2 = proj(validPts[1].lon, validPts[1].lat, w, h);
+    ctx.beginPath(); ctx.moveTo(rp1[0], rp1[1]); ctx.lineTo(rp2[0], rp2[1]);
+    ctx.strokeStyle = '#e6312c'; ctx.lineWidth = 2.4; ctx.lineCap = 'round'; ctx.stroke();
+    // Forecast
+    ctx.beginPath(); ctx.moveTo(rp2[0], rp2[1]);
+    for (var b = 2; b < validPts.length; b++) { var fcp = proj(validPts[b].lon, validPts[b].lat, w, h); ctx.lineTo(fcp[0], fcp[1]); }
+    ctx.strokeStyle = '#1890ff'; ctx.lineWidth = 2.2; ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // Nodes
+  var t = (Date.now() - animStart) / 1000;
+  for (var d = 0; d < allPoints.length; d++) {
+    var np = allPoints[d];
+    if (np.lat == null || np.lon == null) continue;
+    var ncp = proj(np.lon, np.lat, w, h);
+    var isCurrent = d === 0, isActive = d === activeIndex;
+    var opacity = isCurrent ? 1 : Math.max(0.4, 1 - (np.offsetHours || 0) / 140);
+    ctx.globalAlpha = opacity;
+
+    if (isCurrent) {
+      // Glow
+      var glowGrad = ctx.createRadialGradient(ncp[0], ncp[1], 0, ncp[0], ncp[1], 28);
+      glowGrad.addColorStop(0, 'rgba(230,49,44,0.4)'); glowGrad.addColorStop(0.6, 'rgba(230,49,44,0.15)'); glowGrad.addColorStop(1, 'rgba(230,49,44,0)');
+      ctx.beginPath(); ctx.arc(ncp[0], ncp[1], 28, 0, Math.PI * 2); ctx.fillStyle = glowGrad; ctx.fill();
+      // Pulsing ring
+      var r = 11 + 7 * Math.sin(t * Math.PI / 1.2);
+      ctx.beginPath(); ctx.arc(ncp[0], ncp[1], r, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(230,49,44,' + (1 - (r - 11) / 7 * 0.7) + ')'; ctx.lineWidth = 1.4; ctx.stroke();
+      // Center dot
+      ctx.beginPath(); ctx.arc(ncp[0], ncp[1], 6, 0, Math.PI * 2); ctx.fillStyle = '#e6312c'; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(ncp[0], ncp[1], isActive ? 7 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = isActive ? '#096dd9' : '#1890ff'; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+
+    // Label
+    if (isCurrent || isActive) {
+      ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.strokeStyle = 'rgba(24,144,255,0.35)'; ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.rect(ncp[0] + 12, ncp[1] - 16, 64, 32); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = isCurrent ? '#e6312c' : '#1890ff'; ctx.font = 'bold 9px sans-serif';
+      ctx.fillText(isCurrent ? '实况' : '+' + (np.offsetHours || 0) + 'h', ncp[0] + 18, ncp[1] - 4);
+      ctx.fillStyle = '#1a1a2e'; ctx.font = 'bold 10px sans-serif';
+      ctx.fillText((np.windMs != null ? np.windMs : '--') + ' m/s', ncp[0] + 18, ncp[1] + 8);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UI state
+// ═══════════════════════════════════════════════════════════════════
+
+function showError(msg) {
+  var el = document.getElementById('error-area');
+  el.style.display = 'block';
+  el.innerHTML = '<div class="stale-banner"><span class="ic">请求异常</span><span>' + msg + '</span></div>';
+}
+
+function hideError() {
+  document.getElementById('error-area').style.display = 'none';
+}
+
+function updateRefreshBtn() {
+  var btn = document.getElementById('btn-refresh');
+  btn.disabled = refreshing;
+  btn.textContent = refreshing ? '刷新中…' : '立即刷新';
+}
+
+function updateCountdownDisplay() {
+  var min = Math.floor(countdownMs / 60000), sec = Math.floor((countdownMs % 60000) / 1000);
+  var str = pad(String(min)) + ':' + pad(String(sec));
+  document.getElementById('sc-countdown').textContent = str;
+  document.getElementById('tb-countdown').textContent = str;
+}
+
+function updateHeaderTime() {
+  if (cache.data && cache.data.source) {
+    document.getElementById('header-time').textContent = 'JMA 发布: ' + formatJst(cache.data.source.issuedAt);
+    document.getElementById('jma-time').textContent = '报告时间: ' + formatJst(cache.data.source.issuedAt);
+  }
+}
+
+function refresh(manual) {
+  loadData(manual);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════
+
+// Countdown timer
+setInterval(function() {
+  countdownMs = Math.max(0, countdownMs - 1000);
+  if (countdownMs <= 0) countdownMs = REFRESH_MS;
+  updateCountdownDisplay();
+}, 1000);
+
+// Auto-refresh
+setInterval(function() { refresh(false); }, REFRESH_MS);
+
+// Map animation
+setInterval(function() { renderMap(); }, 200);
+
+// Map resize
+window.addEventListener('resize', function() { renderMap(); });
+
+// Map click for point selection
+document.getElementById('map-canvas').addEventListener('click', function(e) {
+  var canvas = document.getElementById('map-canvas');
+  var rect = canvas.getBoundingClientRect();
+  var x = e.clientX - rect.left, y = e.clientY - rect.top;
+  var w = rect.width, h = rect.height;
+  var closest = -1, closestDist = Infinity;
+  for (var i = 0; i < allPoints.length; i++) {
+    var p = allPoints[i];
+    if (p.lat == null || p.lon == null) continue;
+    var cp = proj(p.lon, p.lat, w, h);
+    var dist = Math.sqrt((cp[0] - x) * (cp[0] - x) + (cp[1] - y) * (cp[1] - y));
+    if (dist < closestDist && dist < 30) { closestDist = dist; closest = i; }
+  }
+  if (closest >= 0) selectPoint(closest);
+});
+
+// Initial load
+loadData(false, function() { renderMap(); });
+</script>
+</body>
+</html>
