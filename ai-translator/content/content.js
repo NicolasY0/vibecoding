@@ -12,9 +12,12 @@
   let selectionRect = null;
   let iconEl = null;
   let cardEl = null;
+  let inlineEl = null;    // inline 模式下的译文元素
+  let highlightEls = [];  // inline 模式下的原文高亮
   let settings = {
     targetLang: 'zh-CN', style: 'explain', selectionEnabled: true,
-    altAEnabled: true, activeEngineId: 'microsoft'
+    altAEnabled: true, activeEngineId: 'microsoft',
+    translateMode: 'card' // 'card' | 'inline'
   };
 
   // ========== 初始化 ==========
@@ -113,10 +116,19 @@
     iconEl.style.left = left + 'px';
   }
 
-  // ========== 翻译卡片 ==========
+  // ========== 翻译卡片 / 内联模式 ==========
   function showCard() {
-    if (cardEl) return; // 已有卡片，不重复创建
+    if (cardEl || inlineEl) return;
     dismissIcon();
+    if (settings.translateMode === 'inline') {
+      showInline();
+    } else {
+      showCardPopup();
+    }
+  }
+
+  function showCardPopup() {
+    if (cardEl) return;
     cardEl = document.createElement('div');
     cardEl.id = 'zt-card';
     cardEl.innerHTML = `
@@ -199,9 +211,94 @@
     }
   }
 
-  function dismissAll() { dismissIcon(); dismissCard(); }
+  function dismissAll() { dismissIcon(); dismissCard(); dismissInline(); }
   function dismissIcon() { if (iconEl) { iconEl.remove(); iconEl = null; } }
   function dismissCard() { if (cardEl) { cardEl.remove(); cardEl = null; } }
+  function dismissInline() {
+    if (inlineEl) { inlineEl.remove(); inlineEl = null; }
+    highlightEls.forEach(el => { el.style.backgroundColor = ''; el.style.borderRadius = ''; el.style.padding = ''; });
+    highlightEls = [];
+  }
+
+  /** 内联模式：高亮原文 + 译文插入下方 */
+  function showInline() {
+    if (inlineEl) return;
+    // 高亮选中的文本范围
+    highlightSelection();
+    // 创建内联译文容器
+    inlineEl = document.createElement('div');
+    inlineEl.id = 'zt-inline';
+    inlineEl.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:8px 14px;margin:6px 0 12px 0;font-size:0.9em;line-height:1.7;background:rgba(74,158,255,0.06);border-radius:0 6px 6px 0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif';
+    inlineEl.textContent = '⏳ 翻译中...';
+
+    // 插入到选区下方
+    if (selectionRect) {
+      const range = window.getSelection().getRangeAt(0);
+      let insertAfter = range.endContainer;
+      while (insertAfter && insertAfter.nodeType === 3) insertAfter = insertAfter.parentElement;
+      if (insertAfter) {
+        insertAfter.insertAdjacentElement('afterend', inlineEl);
+        doTranslateInline();
+        return;
+      }
+    }
+    document.body.appendChild(inlineEl);
+    doTranslateInline();
+  }
+
+  function highlightSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    // 对选区中的每个文本节点包裹高亮 span
+    const spans = [];
+    const textNodes = [];
+    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (range.intersectsNode(walker.currentNode)) textNodes.push(walker.currentNode);
+    }
+    for (const node of textNodes) {
+      const start = node === range.startContainer ? range.startOffset : 0;
+      const end = node === range.endContainer ? range.endOffset : node.textContent.length;
+      if (start === end) continue;
+      const span = document.createElement('span');
+      span.style.cssText = 'background:#fff3b0;border-radius:2px;padding:1px 0';
+      const before = node.textContent.slice(0, start);
+      const highlighted = node.textContent.slice(start, end);
+      const after = node.textContent.slice(end);
+      const frag = document.createDocumentFragment();
+      if (before) frag.appendChild(document.createTextNode(before));
+      span.textContent = highlighted;
+      frag.appendChild(span);
+      if (after) frag.appendChild(document.createTextNode(after));
+      node.parentNode.replaceChild(frag, node);
+      spans.push(span);
+    }
+    highlightEls = spans;
+  }
+
+  async function doTranslateInline() {
+    if (!inlineEl) return;
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        action: 'translate', text: selectedText, sourceLang: 'auto', targetLang: settings.targetLang
+      });
+      if (!resp.success) throw new Error(resp.error);
+      const t = resp.data.translations[0];
+      inlineEl.innerHTML = `<div style="font-size:0.85em;color:#999;margin-bottom:4px">🌐 ${resp.data.detectedLang || 'auto'} → ${settings.targetLang} · ${t.engineId}</div>${escapeHtml(t.text)}`;
+
+      chrome.runtime.sendMessage({
+        action: 'saveHistory', original: selectedText, translation: t.text,
+        sourceLang: resp.data.detectedLang || 'auto', targetLang: settings.targetLang,
+        engineId: t.engineId, pageUrl: location.href
+      }).catch(() => {});
+    } catch (e) {
+      inlineEl.innerHTML = `<span style="color:#ff6b6b">翻译失败: ${e.message}</span> <a style="color:#4a9eff;cursor:pointer">🔄 重试</a>`;
+      inlineEl.querySelector('a').onclick = () => { inlineEl.textContent = '⏳ 翻译中...'; doTranslateInline(); };
+    }
+  }
+
+  function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
   // ========== 整页翻译 ==========
   async function translateFullPage() {

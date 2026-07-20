@@ -17,7 +17,7 @@ const storage = {
 
 const DEFAULTS = {
   targetLang: 'zh-CN', style: 'explain', selectionEnabled: true,
-  altAEnabled: true, fullPageMode: 'bilingual',
+  altAEnabled: true, fullPageMode: 'bilingual', translateMode: 'card',
   engines: [
     { id: 'microsoft', type: 'microsoft', enabled: true, priority: 0, name: '微软翻译', builtin: true },
     { id: 'google', type: 'google', enabled: true, priority: 1, name: 'Google 翻译', builtin: true }
@@ -152,6 +152,11 @@ async function handle(msg) {
 
     case 'setTargetLang':
       settings.targetLang = msg.lang;
+      await storage.set('settings', settings);
+      return { success: true };
+
+    case 'setTranslateMode':
+      settings.translateMode = msg.mode;
       await storage.set('settings', settings);
       return { success: true };
 
