@@ -1,721 +1,288 @@
 /**
- * Content Script
- * 文本选区监听 + Shadow DOM UI + 整页翻译 + 闪卡快捷键
- *
- * 所有 UI 组件通过 Shadow DOM 渲染，与宿主页面完全隔离 (CON-SEL-001)
- * 不直接发起网络请求，通过消息委托 background (CON-SEL-002)
+ * SmartTranslate Content Script — 最小可用版
+ * 核心功能：划词翻译 + 整页翻译 + Alt+A 闪卡
  */
 (function () {
   'use strict';
 
-  // ==================== 状态管理 ====================
+  console.log('[SmartTranslate] Content script loaded on:', location.hostname);
 
-  let state = {
-    selectionEnabled: true,
-    altAEnabled: true,
-    targetLang: 'zh-CN',
-    style: 'explain',
-    activeEngineId: 'microsoft',
-    fullPageMode: 'bilingual',
-    fullPageActive: false  // 当前页面是否处于双语模式
-  };
-
-  let currentIcon = null;   // 浮动图标 Shadow DOM 宿主
-  let currentCard = null;   // 翻译卡片 Shadow DOM 宿主
+  // ========== 状态 ==========
   let selectedText = '';
   let selectionRect = null;
+  let iconEl = null;
+  let cardEl = null;
+  let settings = {
+    targetLang: 'zh-CN', style: 'explain', selectionEnabled: true,
+    altAEnabled: true, activeEngineId: 'microsoft'
+  };
 
-  // ==================== 初始化 ====================
+  // ========== 初始化 ==========
+  try {
+    chrome.runtime.sendMessage({ action: 'getSettings' }, (resp) => {
+      if (resp?.success && resp.data) {
+        Object.assign(settings, resp.data);
+      }
+    });
+  } catch (e) {}
 
-  async function init() {
-    console.log('[SmartTranslate] Content script starting on:', location.hostname);
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('keydown', onKeyDown);
+  chrome.runtime.onMessage.addListener(handleMessage);
 
-    // SPA 延迟初始化 — 等待页面动态内容渲染完成
-    await new Promise(r => setTimeout(r, 500));
+  // ========== 划词翻译 ==========
+  function onMouseUp(e) {
+    setTimeout(() => {
+      try {
+        if (!settings.selectionEnabled) return;
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) { dismissAll(); return; }
+        const text = sel.toString().trim();
+        if (!text || text.length > 5000) { dismissAll(); return; }
+        // 点击图标/卡片内部不处理
+        if (e.target.closest('#zt-icon, #zt-card')) return;
 
-    // 从 storage 加载设置
-    await loadSettings();
+        selectedText = text;
+        const range = sel.getRangeAt(0);
+        const rects = range.getClientRects();
+        selectionRect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
 
-    // 监听来自 background 的消息
-    chrome.runtime.onMessage.addListener(handleMessage);
-
-    // 初始化选区监听
-    if (state.selectionEnabled) {
-      document.addEventListener('mouseup', onMouseUp, { passive: true });
-      console.log('[SmartTranslate] Selection listener active');
-    }
-
-    // 键盘快捷键
-    document.addEventListener('keydown', onKeyDown);
-
-    // 滚动监听
-    document.addEventListener('scroll', onScroll, { passive: true, capture: true });
-
-    // 暴露公开 API（供 scripting.executeScript 备用调用）
-    window.__ztTranslator = {
-      translateFullPage,
-      restoreFullPage,
-      getState: () => ({ ...state }),
-      getSelection: () => selectedText
-    };
-
-    console.log('[SmartTranslate] Content script ready ✅');
+        dismissAll();
+        showIcon();
+      } catch (err) { console.warn('[SmartTranslate] mouseup error:', err); }
+    }, 80);
   }
 
-  async function loadSettings() {
-    try {
-      const resp = await chrome.runtime.sendMessage({ action: 'getSettings' });
-      if (resp.success && resp.data) {
-        Object.assign(state, {
-          selectionEnabled: resp.data.selectionEnabled,
-          altAEnabled: resp.data.altAEnabled,
-          targetLang: resp.data.targetLang,
-          style: resp.data.style,
-          activeEngineId: resp.data.activeEngineId,
-          fullPageMode: resp.data.fullPageMode
-        });
-        // 更新选区监听状态
-        if (resp.data.selectionEnabled) {
-          document.addEventListener('mouseup', onMouseUp, { passive: true });
-        } else {
-          document.removeEventListener('mouseup', onMouseUp);
-        }
-      }
-    } catch (e) {
-      console.warn('[SmartTranslate] Failed to load settings:', e.message);
+  function onKeyDown(e) {
+    if (e.key === 'Escape') { dismissAll(); }
+    if (e.altKey && (e.key === 'a' || e.key === 'A') && settings.altAEnabled && selectedText) {
+      e.preventDefault();
+      saveFlashcard();
     }
   }
 
   function handleMessage(msg, sender, sendResponse) {
-    const handlers = {
-      'settingsUpdated': () => { loadSettings(); },
-      'triggerSelectionTranslate': handleTriggerSelection,
-      'triggerFlashcard': handleTriggerFlashcard,
-      'translateProgress': handleTranslateProgress,
-      'callFullPageTranslate': handleCallFullPageTranslate,
-      'restoreFullPage': handleRestoreFullPage,
-      'getSelection': () => { sendResponse({ text: selectedText }); return true; }
-    };
-
-    const handler = handlers[msg.action];
-    if (handler) {
-      const result = handler(msg);
-      if (result !== true) sendResponse({ ok: true });
-    } else {
-      sendResponse({ ok: false, error: 'Unknown action: ' + msg.action });
-    }
+    try {
+      if (msg.action === 'callFullPageTranslate') { translateFullPage(); sendResponse({ ok: true }); }
+      else if (msg.action === 'restoreFullPage') { restoreFullPage(); sendResponse({ ok: true }); }
+      else if (msg.action === 'settingsUpdated') {
+        chrome.runtime.sendMessage({ action: 'getSettings' }, (resp) => {
+          if (resp?.success && resp.data) Object.assign(settings, resp.data);
+        });
+        sendResponse({ ok: true });
+      } else { sendResponse({ ok: true }); }
+    } catch (e) { sendResponse({ ok: false, error: e.message }); }
     return false;
   }
 
-  // ==================== 选区监听 ====================
-
-  function onMouseUp(e) {
-    // 延迟执行，确保选区已确定
-    setTimeout(() => {
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed) {
-        removeIcon();
-        return;
-      }
-
-      const text = selection.toString().trim();
-      // REQ-SEL-007: 空白或超长文本不触发
-      if (!text || text.length > 5000) {
-        removeIcon();
-        return;
-      }
-
-      // 点击的是当前图标/卡片内部，不重新触发
-      if (currentIcon && e.target.closest('#zt-icon-host, #zt-card-host')) {
-        return;
-      }
-
-      selectedText = text;
-
-      // 获取选区末端位置
-      const range = selection.getRangeAt(0);
-      const endRect = range.getClientRects();
-      selectionRect = endRect.length > 0 ? endRect[endRect.length - 1] : range.getBoundingClientRect();
-
-      // REQ-SEL-006: 移除旧图标
-      removeIcon();
-      removeCard();
-      showIcon();
-    }, 50);
-  }
-
-  function onScroll() {
-    if (currentIcon && selectionRect) {
-      updateIconPosition();
-    }
-  }
-
-  function onKeyDown(e) {
-    // Escape 关闭所有翻译 UI
-    if (e.key === 'Escape') {
-      removeCard();
-      removeIcon();
-      removeInlineOnly();
-    }
-    // Alt+A 闪卡
-    if (e.altKey && (e.key === 'a' || e.key === 'A') && state.altAEnabled && selectedText) {
-      e.preventDefault();
-      createFlashcard();
-    }
-  }
-
-  // ==================== 浮动图标 ====================
-
+  // ========== 图标 ==========
   function showIcon() {
-    const host = document.createElement('div');
-    host.id = 'zt-icon-host';
-    host.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:auto;';
-    document.body.appendChild(host);
-
-    const shadow = host.attachShadow({ mode: 'closed' });
-    shadow.innerHTML = `
+    dismissAll();
+    iconEl = document.createElement('div');
+    iconEl.id = 'zt-icon';
+    iconEl.innerHTML = `
       <style>
-        .zt-icon-bar {
-          display: flex; align-items: center; gap: 6px;
-          background: var(--bg, #1e1e2e); border: 1px solid var(--border, #3a3a50);
-          border-radius: 20px; padding: 4px 6px 4px 10px;
-          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-          user-select: none; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;
-        }
-        .zt-icon-btn {
-          width: 26px; height: 26px; background: #4a9eff; border-radius: 50%;
-          cursor: pointer; display: flex; align-items: center; justify-content: center;
-          transition: transform 0.15s; border: none; padding: 0;
-        }
-        .zt-icon-btn:hover { transform: scale(1.12); }
-        .zt-icon-btn svg { width: 14px; height: 14px; fill: #fff; }
-        .zt-close-btn {
-          width: 24px; height: 24px; background: transparent; border: none;
-          color: #888; cursor: pointer; border-radius: 50%; display: flex;
-          align-items: center; justify-content: center; font-size: 14px;
-          transition: all 0.15s; padding: 0; line-height: 1;
-        }
-        .zt-close-btn:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
+        #zt-icon{position:fixed;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+        .zt-bar{display:flex;align-items:center;gap:6px;background:#1e1e2e;border:1px solid #4a9eff;border-radius:22px;padding:5px 8px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
+        .zt-tr-btn{width:30px;height:30px;background:#4a9eff;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;padding:0}
+        .zt-tr-btn:hover{background:#3a8eef}
+        .zt-cls-btn{background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:0 4px;line-height:1}
+        .zt-cls-btn:hover{color:#ff6b6b}
       </style>
-      <div class="zt-icon-bar" title="翻译选中文本">
-        <button class="zt-icon-btn">
-          <svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
-        </button>
-        <button class="zt-close-btn" title="关闭">✕</button>
-      </div>
-    `;
-
-    shadow.querySelector('.zt-icon-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      showCard();
-      removeIcon();
-    });
-    shadow.querySelector('.zt-close-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeIcon();
-      removeInlineOnly();
-    });
-
-    currentIcon = host;
-    updateIconPosition();
-    // 不再全局点击关闭 — 用户显式点 X 或 Escape 才关闭
+      <div class="zt-bar">
+        <button class="zt-tr-btn" title="翻译">🌐</button>
+        <button class="zt-cls-btn" title="关闭">✕</button>
+      </div>`;
+    iconEl.querySelector('.zt-tr-btn').onclick = (e) => { e.stopPropagation(); showCard(); };
+    iconEl.querySelector('.zt-cls-btn').onclick = (e) => { e.stopPropagation(); dismissAll(); };
+    document.body.appendChild(iconEl);
+    positionIcon();
   }
 
-  function updateIconPosition() {
-    if (!currentIcon || !selectionRect) return;
-    const iconSize = 28;
-    let top = selectionRect.bottom + 8;
-    let left = selectionRect.right + 8;
-
-    // 防止溢出
-    if (left + iconSize > window.innerWidth - 8) left = window.innerWidth - iconSize - 8;
-    if (top + iconSize > window.innerHeight - 8) top = selectionRect.top - iconSize - 8;
-    if (top < 8) top = 8;
-
-    currentIcon.style.top = top + 'px';
-    currentIcon.style.left = left + 'px';
+  function positionIcon() {
+    if (!iconEl || !selectionRect) return;
+    let top = selectionRect.bottom + 8, left = selectionRect.right + 8;
+    if (top + 40 > window.innerHeight) top = selectionRect.top - 40;
+    if (left + 140 > window.innerWidth) left = window.innerWidth - 150;
+    if (top < 8) top = 8; if (left < 8) left = 8;
+    iconEl.style.top = top + 'px';
+    iconEl.style.left = left + 'px';
   }
 
-  function removeIcon() {
-    if (currentIcon) {
-      currentIcon.remove();
-      currentIcon = null;
-    }
-  }
-
-  // ==================== 翻译卡片 ====================
-
+  // ========== 翻译卡片 ==========
   function showCard() {
-    const host = document.createElement('div');
-    host.id = 'zt-card-host';
-    host.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:auto;';
-    document.body.appendChild(host);
-
-    const shadow = host.attachShadow({ mode: 'closed' });
-    shadow.innerHTML = `
+    dismissIcon();
+    cardEl = document.createElement('div');
+    cardEl.id = 'zt-card';
+    cardEl.innerHTML = `
       <style>
-        :host { --bg: #1e1e2e; --surface: #2a2a3e; --text: #e0e0e0; --text-dim: #999; --accent: #4a9eff; --border: #3a3a50; --radius: 12px; }
-        .card {
-          background: var(--bg);
-          border: 1px solid var(--border);
-          border-radius: var(--radius);
-          max-width: 400px;
-          max-height: 500px;
-          overflow-y: auto;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-          color: var(--text);
-          font-size: 14px;
-          line-height: 1.6;
-          user-select: text;
-        }
-        .card-header {
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 12px 16px; border-bottom: 1px solid var(--border);
-          font-size: 12px; color: var(--text-dim);
-        }
-        .card-body { padding: 16px; }
-        .card-footer {
-          display: flex; gap: 8px; padding: 8px 16px 12px;
-          border-top: 1px solid var(--border);
-        }
-        .btn {
-          padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
-          background: var(--surface); color: var(--text);
-          cursor: pointer; font-size: 12px; transition: all 0.15s;
-        }
-        .btn:hover { border-color: var(--accent); color: var(--accent); }
-        .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-        .btn-primary:hover { opacity: 0.85; }
-        .loading { display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
-        .loading::after {
-          content: ''; width: 24px; height: 24px; border: 3px solid var(--border);
-          border-top-color: var(--accent); border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .error { padding: 16px; color: #ff6b6b; text-align: center; }
-        .error .retry { color: var(--accent); cursor: pointer; margin-top: 8px; }
-        .src-lang { background: var(--surface); padding: 2px 8px; border-radius: 4px; }
-        .style-badge { background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
-        .card-close-btn {
-          margin-left: auto; width: 24px; height: 24px; background: transparent; border: none;
-          color: #888; cursor: pointer; border-radius: 50%; display: flex;
-          align-items: center; justify-content: center; font-size: 14px;
-          transition: all 0.15s; padding: 0; line-height: 1; flex-shrink: 0;
-        }
-        .card-close-btn:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
-        .toast {
-          position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-          background: #333; color: #fff; padding: 10px 24px; border-radius: 8px;
-          font-size: 13px; z-index: 2147483647; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-          animation: fadeInUp 0.3s ease;
-        }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+        #zt-card{position:fixed;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+        .zt-card-inner{background:#1e1e2e;border:1px solid #3a3a50;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);max-width:420px;max-height:520px;overflow-y:auto;color:#e0e0e0;font-size:14px}
+        .zt-card-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #3a3a50;font-size:12px;color:#888}
+        .zt-card-bd{padding:14px;min-height:60px;line-height:1.7}
+        .zt-card-ft{display:none;gap:8px;padding:8px 14px 12px;border-top:1px solid #3a3a50}
+        .zt-card-ft button{padding:6px 12px;border-radius:6px;border:1px solid #3a3a50;background:#252540;color:#e0e0e0;cursor:pointer;font-size:12px}
+        .zt-card-ft button:hover{border-color:#4a9eff;color:#4a9eff}
+        .zt-loading{text-align:center;padding:30px;color:#888}
+        .zt-loading::after{content:'';display:inline-block;width:20px;height:20px;border:3px solid #3a3a50;border-top-color:#4a9eff;border-radius:50%;animation:zt-spin 0.8s linear infinite}
+        @keyframes zt-spin{to{transform:rotate(360deg)}}
+        .zt-err{color:#ff6b6b;text-align:center;padding:14px}
+        .zt-err a{color:#4a9eff;cursor:pointer}
       </style>
-      <div class="card">
-        <div class="card-header">
-          <span class="src-lang">检测中...</span>
-          <span>→ ${state.targetLang}</span>
-          <span class="style-badge">${state.style === 'explain' ? '释义' : '直译'}</span>
-          <button class="card-close-btn" title="关闭 (Esc)">✕</button>
+      <div class="zt-card-inner">
+        <div class="zt-card-hd">
+          <span>检测中...</span><span>→ ${settings.targetLang}</span>
+          <span style="background:#4a9eff;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px">${settings.style==='explain'?'释义':'直译'}</span>
+          <button style="background:none;border:none;color:#888;cursor:pointer;font-size:16px;margin-left:auto" title="关闭">✕</button>
         </div>
-        <div class="card-body"><div class="loading"></div></div>
-        <div class="card-footer" style="display:none;">
-          <button class="btn btn-copy">📋 复制</button>
-          <button class="btn btn-flashcard">⭐ 加入生词本</button>
-          <button class="btn btn-close">✕ 关闭</button>
+        <div class="zt-card-bd"><div class="zt-loading"></div></div>
+        <div class="zt-card-ft">
+          <button class="zt-copy">📋 复制</button>
+          <button class="zt-star">⭐ 生词本</button>
+          <button class="zt-close">✕ 关闭</button>
         </div>
-      </div>
-    `;
+      </div>`;
 
-    // 定位卡片（REQ-SEL-004）
-    updateCardPosition(host);
-
-    // 绑定按钮
-    const cardEl = shadow.querySelector('.card');
-    cardEl.addEventListener('click', (e) => e.stopPropagation());
-    const closeFn = () => { removeCard(); };
-    shadow.querySelector('.btn-close').addEventListener('click', closeFn);
-    shadow.querySelector('.card-close-btn').addEventListener('click', closeFn);
-    shadow.querySelector('.btn-copy').addEventListener('click', () => copyTranslation(shadow));
-    shadow.querySelector('.btn-flashcard').addEventListener('click', () => createFlashcard(shadow));
-
-    currentCard = host;
-
-    // 发起翻译请求
-    doTranslate(shadow);
-    // 不再全局点击关闭 — 显式点 ✕ 或按 Escape 才关闭
-  }
-
-  function updateCardPosition(host) {
-    const cardW = 400, maxH = 500;
+    // 定位
     let top, left;
-
     if (selectionRect && selectionRect.width > 0) {
-      top = selectionRect.bottom + 36;
-      left = selectionRect.right + 8;
+      top = selectionRect.bottom + 40; left = selectionRect.right + 8;
     } else {
-      // 默认在视口中央偏上
-      top = Math.max(60, window.innerHeight * 0.3);
-      left = Math.max(8, (window.innerWidth - cardW) / 2);
+      top = Math.max(60, window.innerHeight * 0.25); left = Math.max(8, (window.innerWidth - 420) / 2);
     }
+    if (top + 500 > window.innerHeight) top = Math.max(8, selectionRect ? selectionRect.top - 500 : window.innerHeight * 0.15);
+    if (left + 420 > window.innerWidth) left = window.innerWidth - 428;
+    if (top < 8) top = 8; if (left < 8) left = 8;
+    cardEl.style.top = top + 'px';
+    cardEl.style.left = left + 'px';
 
-    // 下方空间不足 → 向上展开
-    if (top + maxH > window.innerHeight - 8) {
-      top = selectionRect.top - Math.min(maxH, 400) - 8;
-    }
-    // 右侧越界 → 左对齐
-    if (left + cardW > window.innerWidth - 8) {
-      left = window.innerWidth - cardW - 8;
-    }
-    if (top < 8) top = 8;
-    if (left < 8) left = 8;
+    // 按钮事件
+    cardEl.querySelector('.zt-card-hd button').onclick = dismissAll;
+    cardEl.querySelector('.zt-close').onclick = dismissAll;
+    cardEl.querySelector('.zt-copy').onclick = () => {
+      const t = cardEl.querySelector('.zt-card-bd').textContent.trim();
+      navigator.clipboard.writeText(t).then(() => toast('✅ 已复制'));
+    };
+    cardEl.querySelector('.zt-star').onclick = saveFlashcard;
 
-    host.style.top = top + 'px';
-    host.style.left = left + 'px';
+    document.body.appendChild(cardEl);
+    doTranslate();
   }
 
-  async function doTranslate(shadow) {
-    const headerEl = shadow.querySelector('.card-header');
-    const bodyEl = shadow.querySelector('.card-body');
-    const footerEl = shadow.querySelector('.card-footer');
-    const srcLangEl = shadow.querySelector('.src-lang');
-
+  async function doTranslate() {
+    const bd = cardEl.querySelector('.zt-card-bd');
+    const hd = cardEl.querySelector('.zt-card-hd span:first-child');
     try {
       const resp = await chrome.runtime.sendMessage({
-        action: 'translate',
-        text: selectedText,
-        sourceLang: 'auto',
-        targetLang: state.targetLang
+        action: 'translate', text: selectedText, sourceLang: 'auto', targetLang: settings.targetLang
       });
-
       if (!resp.success) throw new Error(resp.error);
+      const t = resp.data.translations[0];
+      hd.textContent = resp.data.detectedLang || 'auto';
+      bd.textContent = t.text;
+      cardEl.querySelector('.zt-card-ft').style.display = 'flex';
 
-      const result = resp.data;
-      const t = result.translations[0];
-      const detectedLang = result.detectedLang || t.detectedLang || 'auto';
-
-      srcLangEl.textContent = detectedLang;
-      shadow.querySelector('.style-badge').textContent = t.style === 'explain' ? '释义' : '直译';
-
-      bodyEl.innerHTML = `<div class="translation-text">${escapeHtml(t.text)}</div>`;
-      footerEl.style.display = 'flex';
-
-      // 内联翻译：在原文所在段落下方插入译文
-      injectInlineTranslation(t.text, t.engineId);
-
-      // REQ-SEL-011: 写入翻译历史
+      // 写入历史
       chrome.runtime.sendMessage({
-        action: 'saveHistory',
-        original: selectedText,
-        translation: t.text,
-        sourceLang: detectedLang,
-        targetLang: state.targetLang,
-        engineId: t.engineId,
-        pageUrl: location.href
+        action: 'saveHistory', original: selectedText, translation: t.text,
+        sourceLang: resp.data.detectedLang || 'auto', targetLang: settings.targetLang,
+        engineId: t.engineId, pageUrl: location.href
       }).catch(() => {});
-
     } catch (e) {
-      bodyEl.innerHTML = `
-        <div class="error">
-          <div>翻译失败: ${escapeHtml(e.message)}</div>
-          <div class="retry">🔄 重试</div>
-        </div>
-      `;
-      bodyEl.querySelector('.retry')?.addEventListener('click', () => {
-        bodyEl.innerHTML = '<div class="loading"></div>';
-        doTranslate(shadow);
-      });
-      footerEl.style.display = 'none';
+      bd.innerHTML = `<div class="zt-err">翻译失败: ${e.message}<br><a>🔄 重试</a></div>`;
+      bd.querySelector('a').onclick = () => { bd.innerHTML = '<div class="zt-loading"></div>'; doTranslate(); };
     }
   }
 
-  function removeCard() {
-    if (currentCard) {
-      currentCard.remove();
-      currentCard = null;
-    }
-  }
+  function dismissAll() { dismissIcon(); dismissCard(); }
+  function dismissIcon() { if (iconEl) { iconEl.remove(); iconEl = null; } }
+  function dismissCard() { if (cardEl) { cardEl.remove(); cardEl = null; } }
 
-  /** 仅移除划词内联翻译，不影响整页翻译 */
-  function removeInlineOnly() {
-    document.querySelectorAll('.zt-inline-trans[data-selector="true"]').forEach(el => el.remove());
-  }
-
-  // ==================== 右键菜单 / 快捷键触发 ====================
-
-  function handleTriggerSelection(msg) {
-    selectedText = msg.text;
-    // 尝试获取当前选区的位置
-    const selection = window.getSelection();
-    if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
-      const range = selection.getRangeAt(0);
-      const rect = range.getClientRects();
-      selectionRect = rect.length > 0 ? rect[rect.length - 1] : range.getBoundingClientRect();
-    }
-    // 如果没有选区矩形，在鼠标位置显示
-    if (!selectionRect || (selectionRect.width === 0 && selectionRect.height === 0)) {
-      selectionRect = null;  // 使用默认位置
-    }
-    removeIcon();
-    removeCard();
-    // 如果 skipIcon 为 true，直接显示卡片
-    if (msg.skipIcon) {
-      showCard();
-    } else {
-      showIcon();
-    }
-  }
-
-  async function handleTriggerFlashcard() {
-    if (!selectedText) {
-      const selection = window.getSelection();
-      if (selection && !selection.isCollapsed) {
-        selectedText = selection.toString().trim();
-      }
-    }
-    if (!selectedText) {
-      showToast('⚠ 请先选中文本');
-      return;
-    }
-    await doCreateFlashcard();
-  }
-
-  async function handleCallFullPageTranslate() {
-    await translateFullPage();
-  }
-
-  function handleRestoreFullPage() {
-    restoreFullPage();
-  }
-
-  async function doCreateFlashcard() {
-    try {
-      // 先翻译获得译文
-      const resp = await chrome.runtime.sendMessage({
-        action: 'translate',
-        text: selectedText,
-        sourceLang: 'auto',
-        targetLang: state.targetLang
-      });
-
-      let translation = '';
-      if (resp.success && resp.data.translations?.[0]) {
-        translation = resp.data.translations[0].text;
-      }
-
-      // 保存闪卡
-      const result = await chrome.runtime.sendMessage({
-        action: 'saveFlashcard',
-        original: selectedText,
-        translation
-      });
-
-      showToast(result.synced
-        ? '✅ 已加入生词本'
-        : '📦 已保存（离线，联网后自动同步）');
-    } catch (e) {
-      showToast('❌ 保存失败: ' + e.message);
-    }
-  }
-
-  function createFlashcard(shadow) {
-    // 如果有卡片，直接取翻译结果
-    if (shadow) {
-      const translationText = shadow.querySelector('.translation-text')?.textContent || '';
-      chrome.runtime.sendMessage({
-        action: 'saveFlashcard',
-        original: selectedText,
-        translation: translationText
-      }).then(result => {
-        showToast(result.synced ? '✅ 已加入生词本' : '📦 已保存');
-      }).catch(e => {
-        showToast('❌ 保存失败');
-      });
-    } else {
-      handleTriggerFlashcard();
-    }
-  }
-
-  function copyTranslation(shadow) {
-    const text = shadow.querySelector('.translation-text')?.textContent || '';
-    navigator.clipboard.writeText(text).then(() => {
-      showToast('✅ 已复制');
-    }).catch(() => {
-      showToast('❌ 复制失败');
-    });
-  }
-
-  function handleTranslateProgress(msg) {
-    // 整页翻译进度（由 popup 显示，content 不做 UI）
-  }
-
-  // ==================== Toast ====================
-
-  function showToast(message) {
-    const existing = document.getElementById('zt-toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.id = 'zt-toast';
-    toast.textContent = message;
-    toast.style.cssText = `
-      position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
-      background:#333; color:#fff; padding:10px 24px; border-radius:8px;
-      font-size:13px; z-index:2147483647; box-shadow:0 4px 12px rgba(0,0,0,0.4);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
-    `;
-    document.body.appendChild(toast);
-
-    setTimeout(() => toast.remove(), 2500);
-  }
-
-  // ==================== 整页翻译 ====================
-
+  // ========== 整页翻译 ==========
   async function translateFullPage() {
-    if (state.fullPageActive) {
-      showToast('⚠ 页面已处于双语模式，请先点"还原原文"');
-      return;
-    }
+    const existing = document.querySelectorAll('.zt-trans-page');
+    if (existing.length > 0) { toast('⚠ 已翻译，请先还原'); return; }
 
-    console.log('[SmartTranslate] Full page translate starting...');
-    state.fullPageActive = true;
-
-    // 智能提取：只选主要内容区域，排除导航/页脚/侧边栏
-    const MAIN_SELECTORS = 'main, article, [role="main"], .content, .post, .article, .entry, #content, #main';
-    let container = document.querySelector(MAIN_SELECTORS);
-    if (!container) container = document.body;
-
-    const textNodes = [];
-    const paragraphs = [];
+    // 找主要内容区的块级文本
+    const container = document.querySelector('main, article, [role="main"], .content, #content, #main') || document.body;
+    const blocks = [];
+    const elements = container.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dt, dd, figcaption');
     const seen = new Set();
 
-    // 找块级元素中的文本，跳过隐藏/导航/页脚
-    const blockElements = container.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dt, dd, figcaption, .paragraph, .text-block');
-    for (const el of blockElements) {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') continue;
-      if (el.closest('nav, footer, .nav, .navbar, .menu, .sidebar, .footer, .header, [role="navigation"]')) continue;
-      if (el.classList.contains('zt-trans')) continue;
-
-      const text = el.textContent.trim();
-      if (text.length >= 3 && !seen.has(text)) {
-        seen.add(text);
-        textNodes.push(el);
-        paragraphs.push(text);
-      }
+    for (const el of elements) {
+      if (el.closest('nav, footer, .nav, .navbar, .menu, .sidebar, .footer, .header, [role="navigation"], script, style')) continue;
+      if (getComputedStyle(el).display === 'none') continue;
+      if (el.classList.contains('zt-trans-page')) continue;
+      const t = el.textContent.trim();
+      if (t.length >= 3 && !seen.has(t)) { seen.add(t); blocks.push(el); }
     }
 
-    console.log('[SmartTranslate] Found', paragraphs.length, 'blocks');
+    if (blocks.length === 0) { toast('⚠ 未找到可翻译段落'); return; }
 
-    if (paragraphs.length === 0) {
-      showToast('⚠ 未找到可翻译的段落（可能是动态加载页面）');
-      state.fullPageActive = false;
-      return;
-    }
+    const texts = blocks.map(b => b.textContent.trim());
+    toast(`⏳ 翻译中 (${texts.length} 段)...`);
 
-    showToast(`⏳ 翻译中 (${paragraphs.length} 段)...`);
-
-    // 分批发送，每批 8 段
-    const BATCH = 8;
-    let allResults = [];
-    let failed = 0;
-
-    for (let i = 0; i < paragraphs.length; i += BATCH) {
-      const batch = paragraphs.slice(i, i + BATCH);
+    // 分批
+    const BATCH = 6;
+    let results = [];
+    for (let i = 0; i < texts.length; i += BATCH) {
+      const batch = texts.slice(i, i + BATCH);
       try {
         const resp = await chrome.runtime.sendMessage({
-          action: 'translatePage',
-          texts: batch,
-          sourceLang: 'auto',
-          targetLang: state.targetLang
+          action: 'translatePage', texts: batch, sourceLang: 'auto', targetLang: settings.targetLang
         });
-        if (resp.success && resp.data) {
-          allResults.push(...resp.data);
-        } else {
-          failed += batch.length;
-          allResults.push(...batch.map(() => ({ error: resp.error || 'unknown' })));
-        }
+        if (resp.success && resp.data) results.push(...resp.data);
+        else results.push(...batch.map(() => ({ error: 'failed' })));
       } catch (e) {
-        console.error('[SmartTranslate] Batch', i, 'fail:', e);
-        failed += batch.length;
-        allResults.push(...batch.map(() => ({ error: e.message })));
+        results.push(...batch.map(() => ({ error: e.message })));
       }
     }
 
-    // 注入译文
-    let injected = 0;
-    for (let i = 0; i < textNodes.length; i++) {
-      const el = textNodes[i];
-      const result = allResults[i];
-      if (result && !result.error && result.text) {
-        const transP = document.createElement('p');
-        transP.className = 'zt-trans';
-        transP.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:6px 12px;margin:2px 0 8px 0;font-size:0.9em;line-height:1.7;';
-        transP.textContent = result.text;
-        el.insertAdjacentElement('afterend', transP);
-        injected++;
+    let ok = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      const r = results[i];
+      if (r && !r.error && r.text) {
+        const p = document.createElement('p');
+        p.className = 'zt-trans-page';
+        p.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:6px 12px;margin:2px 0 8px;font-size:0.9em;line-height:1.7';
+        p.textContent = r.text;
+        blocks[i].insertAdjacentElement('afterend', p);
+        ok++;
       }
     }
-
-    showToast(`✅ 翻译完成 (${injected}/${paragraphs.length} 段${failed ? ', ' + failed + ' 失败' : ''})`);
-    console.log('[SmartTranslate] Done:', injected, 'injected,', failed, 'failed');
-  }
-
-  /**
-   * 内联翻译：在选中文本所在的块级元素下方插入译文
-   * 样式与整页翻译一致（蓝色左边框 + 灰色文字）
-   */
-  function injectInlineTranslation(translationText, engineId) {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed) return;
-
-    try {
-      const range = selection.getRangeAt(0);
-      // 向上查找块级父元素
-      let parent = range.commonAncestorContainer;
-      while (parent && parent.nodeType !== 1) parent = parent.parentElement;
-      if (!parent || parent === document.body || parent === document.documentElement) return;
-
-      // 找最近的块级祖先（p, div, li, td, h1-h6 等）
-      let block = parent;
-      const blockTags = new Set(['P', 'DIV', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'SECTION', 'ARTICLE']);
-      while (block && !blockTags.has(block.tagName) && block !== document.body) {
-        block = block.parentElement;
-      }
-      if (!block || block === document.body) {
-        // fallback: 直接插在 parent 后面
-        block = parent;
-      }
-
-      // 移除同一选区的旧译文
-      const existing = block.parentElement?.querySelector('.zt-inline-trans[data-selector="true"]');
-      if (existing) existing.remove();
-
-      // 创建译文元素
-      const transEl = document.createElement('div');
-      transEl.className = 'zt-trans zt-inline-trans';
-      transEl.setAttribute('data-selector', 'true');
-      transEl.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:6px 12px;margin:4px 0 10px 0;font-size:0.95em;line-height:1.7;background:rgba(74,158,255,0.04);border-radius:0 4px 4px 0;';
-      transEl.textContent = translationText;
-
-      // 插入到块元素后面
-      block.insertAdjacentElement('afterend', transEl);
-    } catch (e) {
-      // 静默失败，内联翻译只是辅助功能
-      console.warn('[Inline Translation] Failed:', e.message);
-    }
+    toast(`✅ 翻译完成 (${ok}/${texts.length})`);
   }
 
   function restoreFullPage() {
-    // 移除整页翻译 (.zt-trans) 和划词内联翻译 (.zt-inline-trans)
-    document.querySelectorAll('.zt-trans').forEach(el => el.remove());
-    state.fullPageActive = false;
-    showToast('✅ 已还原原文');
+    document.querySelectorAll('.zt-trans-page').forEach(el => el.remove());
+    toast('✅ 已还原');
   }
 
-  // ==================== 启动 ====================
+  // ========== 闪卡 ==========
+  async function saveFlashcard() {
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        action: 'translate', text: selectedText, sourceLang: 'auto', targetLang: 'zh-CN'
+      });
+      let translation = '';
+      if (resp.success && resp.data?.translations?.[0]) translation = resp.data.translations[0].text;
+      const r = await chrome.runtime.sendMessage({
+        action: 'saveFlashcard', original: selectedText, translation
+      });
+      toast(r.synced ? '✅ 已加入生词本' : '📦 已保存(离线)');
+    } catch (e) { toast('❌ 保存失败'); }
+  }
 
-  init();
+  // ========== Toast ==========
+  function toast(msg) {
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 24px;border-radius:8px;font-size:14px;z-index:2147483647;box-shadow:0 4px 16px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif';
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  // ========== 公开 API ==========
+  window.__ztTranslator = { translateFullPage, restoreFullPage };
+  console.log('[SmartTranslate] Ready ✅');
 })();

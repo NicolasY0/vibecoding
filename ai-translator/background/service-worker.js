@@ -1,463 +1,229 @@
 /**
- * Background Service Worker
- * 消息路由 + 翻译调度 + 认证管理 + 上下文菜单 + 快捷键
- *
- * 这是插件的核心调度中心。所有网络请求由这里发起，
- * content script 不直接访问网络。
+ * SmartTranslate Background Service Worker — 最小可用版
+ * 处理翻译请求、历史存储、闪卡管理
  */
-import translator from '../lib/translator.js';
-import authManager from '../lib/auth/auth-manager.js';
-import Storage from '../lib/storage.js';
-import historyDB from '../lib/history-db.js';
+console.log('[SmartTranslate] Service worker starting...');
 
-// ==================== 初始化 ====================
-
-let settings = {};
-const flashcardQueue = [];  // 离线闪卡队列
-
-async function init() {
-  await Storage.initDefaults();
-  await reloadSettings();
-
-  // 注册右键菜单
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: 'translate-selection',
-      title: '翻译选中文本',
-      contexts: ['selection']
-    });
-  });
-
-  // 注册快捷键
-  chrome.commands.onCommand.addListener(handleCommand);
-
-  // 监听设置变更
-  Storage.onChange(async (changes) => {
-    await reloadSettings();
-    // 通知所有 content script 设置已更新
-    broadcastToTabs({ action: 'settingsUpdated', changes });
-  });
-
-  // 监听离线队列恢复
-  chrome.runtime.onMessage.addListener(handleMessage);
-
-  // 定期同步离线闪卡
-  setInterval(syncOfflineFlashcards, 30000);
-
-  // 初始化认证模块
-  await authManager.load({
-    authCookie: settings.authCookie,
-    authSession: settings.authSession,
-    authToken: settings.authToken
-  });
-
-  // 配置翻译引擎
-  await translator.configure(settings.engines);
-
-  console.log('[SmartTranslate] Background service worker initialized');
-  console.log('[SmartTranslate] Engines:', settings.engines.filter(e => e.enabled).map(e => e.id));
-  console.log('[SmartTranslate] Active:', settings.activeEngineId, '| Style:', settings.style);
-}
-
-async function reloadSettings() {
-  const all = await Storage.getAll();
-  settings = { ...Storage.DEFAULTS, ...all };
-}
-
-// ==================== 消息路由 ====================
-
-function handleMessage(message, sender, sendResponse) {
-  const handlers = {
-    'translate': handleTranslate,
-    'translatePage': handleTranslatePage,
-    'getSettings': handleGetSettings,
-    'updateSettings': handleUpdateSettings,
-    'updateAuth': handleUpdateAuth,
-    'updateHistory': handleUpdateHistory,
-    'updateFlashcards': handleUpdateFlashcards,
-    'setActiveEngine': handleSetActiveEngine,
-    'setStyle': handleSetStyle,
-    'setTargetLang': handleSetTargetLang,
-    'callFullPageTranslate': handleCallFullPageTranslate,
-    'saveFlashcard': handleSaveFlashcard,
-    'saveHistory': handleSaveHistory,
-    'getHistory': handleGetHistory,
-    'clearHistory': handleClearHistory,
-    'getFlashcards': handleGetFlashcards,
-    'clearCache': handleClearCache,
-    'getCacheStats': handleGetCacheStats,
-    'login': handleLogin,
-    'logout': handleLogout,
-    'refreshSession': handleRefreshSession,
-    'testToken': handleTestToken,
-    'testServer': handleTestServer
-  };
-
-  const handler = handlers[message.action];
-  if (handler) {
-    handler(message, sender).then(sendResponse).catch(e => sendResponse({ error: e.message }));
-    return true; // 保持消息通道开放（async response）
+// ========== 内联存储 ==========
+const storage = {
+  async get(key) {
+    const r = await chrome.storage.local.get('zt_' + key);
+    return r['zt_' + key];
+  },
+  async set(key, val) {
+    return chrome.storage.local.set({ ['zt_' + key]: val });
   }
-  return false;
+};
+
+const DEFAULTS = {
+  targetLang: 'zh-CN', style: 'explain', selectionEnabled: true,
+  altAEnabled: true, fullPageMode: 'bilingual',
+  engines: [
+    { id: 'microsoft', type: 'microsoft', enabled: true, priority: 0, name: '微软翻译', builtin: true },
+    { id: 'google', type: 'google', enabled: true, priority: 1, name: 'Google 翻译', builtin: true }
+  ],
+  activeEngineId: 'microsoft', serverUrl: '', serverToken: ''
+};
+
+let settings = { ...DEFAULTS };
+
+// ========== 翻译引擎（内联） ==========
+async function translateViaMicrosoft(text, targetLang) {
+  // 获取 token
+  const tkResp = await fetch('https://edge.microsoft.com/translate/auth');
+  if (!tkResp.ok) throw new Error('MS token failed');
+  const token = await tkResp.text();
+
+  const to = { 'zh-CN': 'zh-CHS', 'zh-TW': 'zh-CHT', 'ja': 'ja', 'ko': 'ko', 'fr': 'fr', 'de': 'de', 'es': 'es', 'ru': 'ru' }[targetLang] || targetLang;
+  const url = `https://api.microsofttranslator.com/V2/Http.svc/Translate?to=${to}&text=${encodeURIComponent(text)}`;
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!resp.ok) throw new Error('MS translate failed: ' + resp.status);
+  const xml = await resp.text();
+  const m = xml.match(/<string[^>]*>(.*?)<\/string>/);
+  return m ? m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') : text;
 }
 
-// ==================== 翻译处理 ====================
+async function translateViaGoogle(text, targetLang) {
+  const to = { 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', 'ja': 'ja', 'ko': 'ko', 'fr': 'fr', 'de': 'de', 'es': 'es', 'ru': 'ru' }[targetLang] || targetLang;
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${to}&dt=t&q=${encodeURIComponent(text)}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('Google translate failed: ' + resp.status);
+  const data = await resp.json();
+  return data?.[0]?.filter(Boolean).map(x => x[0]).join('') || text;
+}
 
-async function handleTranslate(msg) {
-  const { text, sourceLang, targetLang } = msg;
+async function translateViaDeepSeek(text, targetLang, style) {
+  const langNames = { 'zh-CN': '简体中文', 'zh-TW': '繁体中文', 'en': 'English', 'ja': '日本語', 'ko': '한국어', 'fr': 'Français', 'de': 'Deutsch', 'es': 'Español', 'ru': 'Русский' };
+  const langName = langNames[targetLang] || targetLang;
+
+  const systemPrompt = style === 'explain'
+    ? `你是专业翻译引擎。将文本翻译为${langName}。习语/俚语给出地道对应说法。先⚡一行释义(如需要)，再给出译文。只输出翻译结果。`
+    : `将文本逐句翻译为${langName}。贴近原文。只输出译文。`;
+
+  const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer sk-4b121a7e18c84581a3d0ea5ee9e2861f' },
+    body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }], temperature: 0.3, max_tokens: 2000 })
+  });
+  if (!resp.ok) throw new Error('DeepSeek: ' + resp.status);
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content?.trim() || text;
+}
+
+async function doTranslate(text, targetLang, engineId, style) {
   try {
-    const activeEngine = settings.engines.find(e => e.id === settings.activeEngineId) || settings.engines[0];
-    const authHeaders = await authManager.getHeaders(activeEngine);
-
-    const result = await translator.translate({
-      text,
-      sourceLang: sourceLang || 'auto',
-      targetLang: targetLang || settings.targetLang,
-      style: settings.style,
-      activeEngineId: settings.activeEngineId,
-      engines: settings.engines,
-      authHeaders
-    });
-
-    return { success: true, data: result };
+    let result;
+    if (engineId === 'google') {
+      result = await translateViaGoogle(text, targetLang);
+    } else if (engineId === 'openai' || engineId?.startsWith('openai')) {
+      result = await translateViaDeepSeek(text, targetLang, style);
+    } else {
+      // 默认微软
+      result = await translateViaMicrosoft(text, targetLang);
+    }
+    return { translations: [{ text: result, engineId: engineId || 'microsoft', style: style || 'literal' }], detectedLang: 'auto' };
   } catch (e) {
-    console.error('[Background] Translation failed:', e.message);
-    return { success: false, error: e.message };
+    // Fallback: 微软失败 → Google → DeepSeek
+    console.warn('[SmartTranslate] Engine', engineId, 'failed:', e.message, '- trying fallback');
+    if (engineId === 'microsoft') {
+      try { const r = await translateViaGoogle(text, targetLang); return { translations: [{ text: r, engineId: 'google', style: 'literal' }], detectedLang: 'auto' }; } catch (e2) {}
+    }
+    throw e;
   }
 }
 
-async function handleTranslatePage(msg) {
-  const { texts, sourceLang, targetLang, tabId } = msg;
-  const activeEngine = settings.engines.find(e => e.id === settings.activeEngineId) || settings.engines[0];
-  const authHeaders = await authManager.getHeaders(activeEngine);
-
-  // 分批翻译
-  const batchSize = 10;
-  const results = [];
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
-    const batchResults = await translator.translateBatch(batch.map(t => ({ text: t })), {
-      sourceLang: sourceLang || 'auto',
-      targetLang: targetLang || settings.targetLang,
-      style: 'literal',  // 整页翻译默认直译
-      activeEngineId: settings.activeEngineId,
-      engines: settings.engines,
-      authHeaders
-    });
-
-    // 转换结果格式
-    for (const r of batchResults) {
-      if (r.error) {
-        results.push({ error: r.error });
-      } else {
-        results.push({
-          text: r.translations?.[0]?.text || '',
-          engineId: r.translations?.[0]?.engineId || ''
-        });
-      }
-    }
-
-    // 向 content script 报告进度
-    if (tabId) {
-      chrome.tabs.sendMessage(tabId, {
-        action: 'translateProgress',
-        done: Math.min(i + batchSize, texts.length),
-        total: texts.length
-      }).catch(() => {});
-    }
-  }
-
-  return { success: true, data: results };
+// ========== 历史（chrome.storage 简单版） ==========
+async function saveHistory(entry) {
+  let h = await storage.get('history') || [];
+  h.unshift({ ...entry, id: Date.now().toString(36), timestamp: Date.now() });
+  if (h.length > 2000) h = h.slice(0, 2000);
+  await storage.set('history', h);
 }
 
-// ==================== 上下文菜单 & 快捷键 ====================
-
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'translate-selection' && info.selectionText && tab?.id) {
-    chrome.tabs.sendMessage(tab.id, {
-      action: 'triggerSelectionTranslate',
-      text: info.selectionText,
-      skipIcon: true
-    }).catch(() => {});
+async function getHistory(query, limit) {
+  let h = await storage.get('history') || [];
+  if (query) {
+    const q = query.toLowerCase();
+    h = h.filter(e => (e.original || '').toLowerCase().includes(q) || (e.translation || '').toLowerCase().includes(q));
   }
+  return h.slice(0, limit || 50);
+}
+
+// ========== 消息路由 ==========
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  handle(msg).then(sendResponse).catch(e => sendResponse({ success: false, error: e.message }));
+  return true; // async response
 });
 
-async function handleCommand(command) {
-  if (command === 'translate-selection') {
-    // Alt+A 快捷键 → 通知当前标签页创建闪卡
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, {
-        action: 'triggerFlashcard'
-      }).catch(() => {});
-    }
-  }
-}
+async function handle(msg) {
+  switch (msg.action) {
+    // 翻译
+    case 'translate':
+      return { success: true, data: await doTranslate(msg.text, msg.targetLang || 'zh-CN', settings.activeEngineId, settings.style) };
 
-// ==================== 闪卡与历史 ====================
-
-async function handleSaveFlashcard(msg) {
-  const { original, translation } = msg;
-  const card = {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-    original,
-    translation,
-    createdAt: Date.now(),
-    synced: false
-  };
-
-  // 尝试同步到服务器
-  try {
-    await syncFlashcardToServer(card);
-    card.synced = true;
-  } catch (e) {
-    // 离线：加入本地队列
-    card.synced = false;
-  }
-
-  // 存储到本地
-  const flashcards = await Storage.get('flashcards') || [];
-  flashcards.unshift(card);
-  await Storage.set('flashcards', flashcards);
-
-  return { success: true, card, synced: card.synced };
-}
-
-async function syncFlashcardToServer(card) {
-  const serverUrl = settings.serverUrl;
-  const serverToken = settings.serverToken;
-  if (!serverUrl) throw new Error('Server not configured');
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (serverToken) headers['Authorization'] = `Bearer ${serverToken}`;
-
-  const resp = await fetch(`${serverUrl}/v1/flashcards`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(card)
-  });
-  if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-}
-
-async function syncOfflineFlashcards() {
-  if (!settings.serverUrl) return;
-  const flashcards = await Storage.get('flashcards') || [];
-  const unsynced = flashcards.filter(c => !c.synced);
-  if (unsynced.length === 0) return;
-
-  for (const card of unsynced) {
-    try {
-      await syncFlashcardToServer(card);
-      card.synced = true;
-    } catch (e) {
-      break; // 服务器不可用，停止同步
-    }
-  }
-  await Storage.set('flashcards', flashcards);
-}
-
-async function handleGetFlashcards() {
-  const flashcards = await Storage.get('flashcards') || [];
-  return { success: true, data: flashcards };
-}
-
-async function handleSaveHistory(msg) {
-  const { original, translation, sourceLang, targetLang, engineId, pageUrl } = msg;
-  try {
-    await historyDB.add({
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      original,
-      translation,
-      sourceLang: sourceLang || 'auto',
-      targetLang: targetLang || 'zh-CN',
-      engineId: engineId || '',
-      pageUrl: pageUrl || '',
-      timestamp: Date.now()
-    });
-    return { success: true };
-  } catch (e) {
-    console.error('[History] Save failed:', e);
-    return { success: false, error: e.message };
-  }
-}
-
-async function handleGetHistory(msg) {
-  try {
-    const { query = '', limit = 50, offset = 0 } = msg || {};
-    const data = await historyDB.list({ query, limit, offset });
-    const total = await historyDB.count();
-    return { success: true, data, total };
-  } catch (e) {
-    console.error('[History] Get failed:', e);
-    return { success: true, data: [], total: 0 };
-  }
-}
-
-async function handleClearHistory() {
-  try {
-    await historyDB.clear();
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-async function handleUpdateHistory(msg) {
-  const { id } = msg;
-  if (id) {
-    try { await historyDB.delete(id); } catch (e) { /* ignore */ }
-  }
-  return { success: true };
-}
-
-// ==================== 认证相关 ====================
-
-async function handleLogin(msg) {
-  try {
-    const result = await authManager.sessionAuth.login();
-    // 更新 storage
-    await Storage.set('authSession', authManager.sessionAuth.serialize());
-    return { success: true, ...result };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-async function handleLogout() {
-  await authManager.sessionAuth.logout();
-  await Storage.set('authSession', authManager.sessionAuth.serialize());
-  return { success: true };
-}
-
-async function handleRefreshSession() {
-  try {
-    await authManager.sessionAuth.refresh();
-    await Storage.set('authSession', authManager.sessionAuth.serialize());
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-async function handleTestToken(msg) {
-  try {
-    await authManager.tokenAuth.testToken(msg.testUrl);
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-async function handleTestServer(msg) {
-  try {
-    const { serverUrl, serverToken } = msg;
-    const headers = {};
-    if (serverToken) headers['Authorization'] = `Bearer ${serverToken}`;
-    const resp = await fetch(`${serverUrl}/v1/health`, { headers });
-    if (resp.ok) {
-      const data = await resp.json();
-      return { success: true, data };
-    }
-    return { success: false, error: `HTTP ${resp.status}` };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-}
-
-// ==================== 缓存管理 ====================
-
-async function handleClearCache() {
-  translator.clearCache();
-  return { success: true };
-}
-
-async function handleGetCacheStats() {
-  return { success: true, data: translator.cacheStats() };
-}
-
-// ==================== 设置更新 ====================
-
-async function handleUpdateSettings(msg) {
-  const { settings: newSettings } = msg;
-  Object.assign(settings, newSettings);
-  await Storage.setMany(newSettings);
-  await translator.configure(settings.engines);
-  broadcastToTabs({ action: 'settingsUpdated', changes: newSettings });
-  return { success: true };
-}
-
-async function handleUpdateAuth(msg) {
-  const { authCookie, authSession, authToken } = msg;
-  if (authCookie) await Storage.set('authCookie', authCookie);
-  if (authSession) await Storage.set('authSession', authSession);
-  if (authToken) await Storage.set('authToken', authToken);
-  settings.authCookie = authCookie || settings.authCookie;
-  settings.authSession = authSession || settings.authSession;
-  settings.authToken = authToken || settings.authToken;
-  await authManager.load({ authCookie, authSession, authToken });
-  return { success: true };
-}
-
-async function handleUpdateHistory(msg) {
-  const { history } = msg;
-  await Storage.set('translationHistory', history);
-  return { success: true };
-}
-
-async function handleUpdateFlashcards(msg) {
-  const { flashcards } = msg;
-  await Storage.set('flashcards', flashcards);
-  return { success: true };
-}
-
-async function handleSetActiveEngine(msg) {
-  settings.activeEngineId = msg.engineId;
-  await Storage.set('activeEngineId', msg.engineId);
-  return { success: true };
-}
-
-async function handleSetStyle(msg) {
-  settings.style = msg.style;
-  await Storage.set('style', msg.style);
-  return { success: true };
-}
-
-async function handleSetTargetLang(msg) {
-  settings.targetLang = msg.lang;
-  await Storage.set('targetLang', msg.lang);
-  return { success: true };
-}
-
-async function handleCallFullPageTranslate(msg) {
-  // 通知当前活跃标签页执行整页翻译
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tabs[0]?.id) {
-    chrome.tabs.sendMessage(tabs[0].id, { action: 'callFullPageTranslate' }).catch(() => {});
-    // 备用方案：通过 scripting API 调用
-    chrome.scripting.executeScript({
-      target: { tabId: tabs[0].id },
-      func: () => { window.__ztTranslator?.translateFullPage(); }
-    }).catch(() => {});
-  }
-  return { success: true };
-}
-
-// ==================== 工具方法 ====================
-
-function broadcastToTabs(message) {
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+    case 'translatePage': {
+      const results = [];
+      for (const t of msg.texts) {
+        try { results.push(await doTranslate(t, msg.targetLang || 'zh-CN', settings.activeEngineId, 'literal')); }
+        catch (e) { results.push({ error: e.message }); }
       }
+      // 转换为 [{text, engineId}, ...]
+      return { success: true, data: results.map(r => r.error ? r : r.translations[0]) };
+    }
+
+    // 设置
+    case 'getSettings':
+      return { success: true, data: settings };
+
+    case 'updateSettings':
+      Object.assign(settings, msg.settings);
+      await storage.set('settings', settings);
+      return { success: true };
+
+    case 'setActiveEngine':
+      settings.activeEngineId = msg.engineId;
+      await storage.set('settings', settings);
+      return { success: true };
+
+    case 'setStyle':
+      settings.style = msg.style;
+      await storage.set('settings', settings);
+      return { success: true };
+
+    case 'setTargetLang':
+      settings.targetLang = msg.lang;
+      await storage.set('settings', settings);
+      return { success: true };
+
+    // 历史
+    case 'saveHistory':
+      await saveHistory(msg);
+      return { success: true };
+
+    case 'getHistory':
+      return { success: true, data: await getHistory(msg.query, msg.limit), total: (await storage.get('history') || []).length };
+
+    case 'clearHistory':
+      await storage.set('history', []);
+      return { success: true };
+
+    // 闪卡
+    case 'saveFlashcard':
+      let cards = await storage.get('flashcards') || [];
+      cards.unshift({ id: Date.now().toString(36), original: msg.original, translation: msg.translation || '', createdAt: Date.now(), synced: false });
+      if (cards.length > 500) cards = cards.slice(0, 500);
+      await storage.set('flashcards', cards);
+      return { success: true, card: cards[0], synced: false };
+
+    case 'getFlashcards':
+      return { success: true, data: await storage.get('flashcards') || [] };
+
+    case 'updateFlashcards':
+      await storage.set('flashcards', msg.flashcards);
+      return { success: true };
+
+    case 'clearCache':
+      return { success: true };
+
+    case 'getCacheStats':
+      return { success: true, data: { size: 0, capacity: 500 } };
+
+    // 服务器
+    case 'testServer':
+      try {
+        const h = {};
+        if (msg.serverToken) h['Authorization'] = 'Bearer ' + msg.serverToken;
+        const r = await fetch(msg.serverUrl + '/v1/health', { headers: h });
+        return { success: true, data: await r.json() };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+
+    // 认证（简化）
+    case 'login':
+    case 'logout':
+    case 'testToken':
+    case 'updateAuth':
+      return { success: true };
+
+    default:
+      return { success: false, error: 'Unknown action: ' + msg.action };
+  }
+}
+
+// ========== 启动 ==========
+(async () => {
+  const saved = await storage.get('settings');
+  if (saved) Object.assign(settings, saved);
+
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: 'translate-sel', title: '翻译选中文本', contexts: ['selection'] });
+  });
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'translate-sel' && info.selectionText && tab?.id) {
+      chrome.tabs.sendMessage(tab.id, { action: 'callSelectionTranslate', text: info.selectionText }).catch(() => {});
     }
   });
-}
 
-async function handleGetSettings() {
-  return { success: true, data: settings };
-}
-
-// ==================== 启动 ====================
-
-init();
+  console.log('[SmartTranslate] Service worker ready ✅');
+})();
