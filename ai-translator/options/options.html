@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Translator 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>🌐 AI Translator</h1>
+        <span class="version">v1.0</span>
+      </div>
+      <nav class="sidebar-nav">
+        <button v-for="tab in tabs" :key="tab.id"
+                :class="['nav-item', { active: activeTab === tab.id }]"
+                @click="activeTab = tab.id">
+          <span class="nav-icon">{{ tab.icon }}</span>
+          <span class="nav-label">{{ tab.label }}</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="https://github.com" target="_blank" class="footer-link">帮助文档</a>
+        <span class="footer-version">Build 1.0.0</span>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <!-- ==================== 通用设置 ==================== -->
+      <section v-show="activeTab === 'general'" class="page">
+        <h2>⚙ 通用设置</h2>
+
+        <div class="card">
+          <h3>目标语言</h3>
+          <p class="desc">翻译结果的目标语言。划词翻译和整页翻译都将使用此设置。</p>
+          <select v-model="settings.targetLang" @change="save" class="input">
+            <option value="zh-CN">简体中文 (默认)</option>
+            <option value="zh-TW">繁体中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="ru">Русский</option>
+          </select>
+        </div>
+
+        <div class="card">
+          <h3>翻译风格</h3>
+          <p class="desc">
+            <strong>释义</strong>：LLM 引擎用目标语言习惯表达，解释习语/俚语/文化词，含 ⚡ 行一句话释义。<br>
+            <strong>直译</strong>：贴近原文结构。注意：仅 LLM 引擎支持释义，传统 MT 引擎强制直译。
+          </p>
+          <div class="radio-group">
+            <label class="radio-card" :class="{ selected: settings.style === 'explain' }">
+              <input type="radio" v-model="settings.style" value="explain" @change="save">
+              <span class="radio-title">📖 释义</span>
+              <span class="radio-desc">推荐 · 适合理解习语和文化表达</span>
+            </label>
+            <label class="radio-card" :class="{ selected: settings.style === 'literal' }">
+              <input type="radio" v-model="settings.style" value="literal" @change="save">
+              <span class="radio-title">📝 直译</span>
+              <span class="radio-desc">贴近原文 · 适合技术文档</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>整页翻译默认模式</h3>
+          <select v-model="settings.fullPageMode" @change="save" class="input">
+            <option value="bilingual">双语对照 (原文+译文)</option>
+            <option value="translation">仅译文</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- ==================== 功能开关 ==================== -->
+      <section v-show="activeTab === 'features'" class="page">
+        <h2>🔧 功能开关</h2>
+
+        <div class="card toggle-card">
+          <div class="toggle-info">
+            <h3>划词翻译</h3>
+            <p class="desc">选中网页文本后显示翻译图标。关闭后不监听选区，但右键菜单仍可用。</p>
+          </div>
+          <label class="switch"><input type="checkbox" v-model="settings.selectionEnabled" @change="save"><span></span></label>
+        </div>
+
+        <div class="card toggle-card">
+          <div class="toggle-info">
+            <h3>Alt+A 生词闪卡</h3>
+            <p class="desc">选中文本后按 <kbd>Alt</kbd>+<kbd>A</kbd> 一键收藏原文+译文到生词本，离线自动同步。</p>
+          </div>
+          <label class="switch"><input type="checkbox" v-model="settings.altAEnabled" @change="save"><span></span></label>
+        </div>
+
+        <div class="card">
+          <h3>界面主题</h3>
+          <p class="desc">Popup 和翻译卡片的配色方案。</p>
+          <select v-model="theme" @change="saveTheme" class="input" style="max-width:200px">
+            <option value="system">跟随系统 (默认)</option>
+            <option value="dark">深色模式</option>
+            <option value="light">浅色模式</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- ==================== 引擎管理 ==================== -->
+      <section v-show="activeTab === 'engines'" class="page">
+        <h2>🚀 翻译引擎</h2>
+        <p class="desc">拖拽排序决定 fallback 优先级。当活跃引擎失败时，自动按优先级降级到下一个可用引擎。</p>
+
+        <div class="engine-list">
+          <div v-for="(eng, idx) in enginesSorted" :key="eng.id"
+               class="engine-card" :class="{ active: eng.id === settings.activeEngineId, dragging: dragIdx === idx }"
+               draggable="true"
+               @dragstart="onDragStart($event, idx)"
+               @dragover.prevent="dragIdx = idx"
+               @dragleave="dragIdx = null"
+               @drop="onDrop($event, idx)"
+               @dragend="dragIdx = null">
+            <div class="engine-main">
+              <div class="engine-info">
+                <span class="drag-handle">⋮⋮</span>
+                <span class="engine-name">{{ eng.name || eng.id }}</span>
+                <span class="engine-type">{{ eng.type.toUpperCase() }}</span>
+                <span v-if="eng.builtin" class="builtin-badge">内置</span>
+                <span v-if="eng.id === settings.activeEngineId" class="active-badge">● 使用中</span>
+              </div>
+              <div class="engine-controls">
+                <label class="switch"><input type="checkbox" :checked="eng.enabled" @change="toggleEngine(eng)"><span></span></label>
+                <button v-if="eng.enabled && eng.id !== settings.activeEngineId" class="btn-sm" @click="setActive(eng)">设为活跃</button>
+                <button v-if="!eng.builtin" class="btn-sm btn-danger" @click="deleteEngine(eng)">删除</button>
+              </div>
+            </div>
+            <div v-if="!eng.builtin && eng.enabled" class="engine-config">
+              <input v-if="eng.type === 'deepl' || eng.type === 'openai'" v-model="eng.apiKey" placeholder="API Key" type="password" @change="saveEngines" class="input-sm">
+              <input v-if="eng.type === 'openai'" v-model="eng.apiUrl" placeholder="API URL (如 https://api.deepseek.com/v1/chat/completions)" @change="saveEngines" class="input-sm">
+              <input v-if="eng.type === 'openai'" v-model="eng.model" placeholder="Model (如 deepseek-chat)" @change="saveEngines" class="input-sm">
+              <select v-if="eng.type === 'openai' || eng.type === 'deepl'" v-model="eng.authMethod" @change="saveEngines" class="input-sm" style="max-width:200px">
+                <option value="none">无认证</option>
+                <option value="cookie">Cookie 认证</option>
+                <option value="session">Session 认证</option>
+                <option value="token">Token 认证</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="add-engine-bar">
+          <select v-model="newEngineType" class="input" style="max-width:140px">
+            <option value="">选择类型...</option>
+            <option value="deepl">DeepL</option>
+            <option value="openai">OpenAI 兼容</option>
+          </select>
+          <input v-model="newEngineName" placeholder="引擎名称" class="input" style="max-width:180px">
+          <button class="btn btn-primary" @click="addEngine" :disabled="!newEngineType || !newEngineName">+ 添加引擎</button>
+        </div>
+      </section>
+
+      <!-- ==================== 认证 ==================== -->
+      <section v-show="activeTab === 'auth'" class="page">
+        <h2>🔑 认证配置</h2>
+        <p class="desc">为自定义翻译后端配置认证方式。内置引擎和公共 API 无需配置。引擎管理面板中选择引擎的认证方式。</p>
+
+        <div class="sub-tabs">
+          <button v-for="st in authSubTabs" :key="st.id"
+                  :class="['sub-tab', { active: authTab === st.id }]"
+                  @click="authTab = st.id">{{ st.label }}</button>
+        </div>
+
+        <!-- Cookie -->
+        <div v-show="authTab === 'cookie'" class="auth-panel card">
+          <h3>🍪 Cookie 认证</h3>
+          <p class="desc">配置后翻译请求将携带 Cookie header。适用于自建服务需要登录态的场景。</p>
+          <div class="cookie-grid">
+            <div v-for="(c, i) in authCookie.cookies" :key="i" class="cookie-row">
+              <input v-model="c.name" placeholder="名称" @change="saveAuth" class="input">
+              <input v-model="c.value" placeholder="值" @change="saveAuth" class="input">
+              <button class="btn-sm btn-danger" @click="removeCookie(i)">✕</button>
+            </div>
+          </div>
+          <button class="btn btn-secondary" @click="addCookie" style="margin-top:8px">+ 添加 Cookie</button>
+          <div v-if="authCookie.cookies.length === 0" class="empty-hint">未配置 Cookie</div>
+        </div>
+
+        <!-- Session -->
+        <div v-show="authTab === 'session'" class="auth-panel card">
+          <h3>🔐 Session 认证</h3>
+          <p class="desc">配置登录端点，插件自动管理 session 生命周期：登录 → 自动刷新 → 过期提示。</p>
+
+          <div v-if="authSession.sessionId" class="session-bar" :class="sessionStatusClass">
+            <span class="session-dot"></span>
+            <span>Session: {{ authSession.sessionId?.slice(0,20) }}...</span>
+            <span v-if="sessionRemaining > 0">剩余: {{ formatTime(sessionRemaining) }}</span>
+            <span v-else>已过期</span>
+          </div>
+
+          <div class="form-group">
+            <label>登录 URL</label>
+            <input v-model="authSession.loginUrl" placeholder="https://your-api.com/api/login" @change="saveAuth" class="input">
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex:1">
+              <label>用户名</label>
+              <input v-model="authSession.username" placeholder="用户名" @change="saveAuth" class="input">
+            </div>
+            <div class="form-group" style="flex:1">
+              <label>密码</label>
+              <input v-model="authSessionPassword" type="password" placeholder="不保存明文" class="input">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>刷新 URL (可选)</label>
+            <input v-model="authSession.refreshUrl" placeholder="用于刷新 session" @change="saveAuth" class="input">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" @click="doLogin" :disabled="authLoading">
+              {{ authLoading ? '登录中...' : '🔑 登录' }}
+            </button>
+            <button class="btn btn-secondary" @click="doLogout" :disabled="!authSession.sessionId">🚪 登出</button>
+          </div>
+        </div>
+
+        <!-- Token -->
+        <div v-show="authTab === 'token'" class="auth-panel card">
+          <h3>🎫 Token 认证</h3>
+          <p class="desc">支持 Bearer JWT 和 API Key。Token 使用 Web Crypto AES-GCM 加密后存储。</p>
+
+          <div class="radio-row">
+            <label class="radio-card small" :class="{ selected: authToken.tokenType === 'bearer' }">
+              <input type="radio" v-model="authToken.tokenType" value="bearer" @change="saveAuth"> Bearer (JWT)
+            </label>
+            <label class="radio-card small" :class="{ selected: authToken.tokenType === 'apikey' }">
+              <input type="radio" v-model="authToken.tokenType" value="apikey" @change="saveAuth"> API Key
+            </label>
+          </div>
+
+          <div class="form-group" v-if="authToken.tokenType === 'apikey'">
+            <label>自定义 Header 名称</label>
+            <input v-model="authToken.headerName" placeholder="X-API-Key" @change="saveAuth" class="input">
+          </div>
+          <div class="form-group">
+            <label>Token / API Key</label>
+            <input v-model="authTokenInput" type="password" placeholder="粘贴 Token..." @change="onTokenInput" class="input">
+          </div>
+
+          <div v-if="jwtInfo" class="jwt-card">
+            <div class="jwt-header">
+              <span :class="jwtInfo.expired ? 'text-danger' : 'text-success'">
+                {{ jwtInfo.expired ? '⚠ 已过期' : '✅ 有效' }}
+              </span>
+              <span v-if="!jwtInfo.expired && jwtInfo.remainingMs < 300000" class="text-warning">即将过期</span>
+            </div>
+            <pre>{{ JSON.stringify(jwtInfo.payload, null, 2) }}</pre>
+          </div>
+
+          <div class="form-group" v-if="authTokenInput">
+            <label>测试 URL (验证 Token 是否有效)</label>
+            <div class="input-row">
+              <input v-model="tokenTestUrl" placeholder="https://your-api.com/v1/health" class="input" style="flex:1">
+              <button class="btn btn-secondary" @click="testToken" :disabled="authLoading">测试</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 服务器 ==================== -->
+      <section v-show="activeTab === 'server'" class="page">
+        <h2>🖥 自建服务器</h2>
+        <p class="desc">部署 Node.js 翻译缓存服务器，支持跨浏览器实例共享翻译缓存和闪卡云端同步。服务器关停不影响本地翻译功能。</p>
+
+        <div class="card">
+          <div class="form-group">
+            <label>服务器地址</label>
+            <input v-model="settings.serverUrl" placeholder="https://your-server.com" @change="save" class="input">
+          </div>
+          <div class="form-group">
+            <label>API Token (可选)</label>
+            <input v-model="settings.serverToken" type="password" placeholder="服务器鉴权 Token" @change="save" class="input">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" @click="testServer" :disabled="serverTesting || !settings.serverUrl">
+              {{ serverTesting ? '⏳ 测试中...' : '🔗 测试连接' }}
+            </button>
+          </div>
+          <div v-if="serverResult" :class="['result-msg', serverResult.success ? 'text-success' : 'text-danger']">
+            {{ serverResult.success ? '✅ 连接成功 — 缓存: ' + (serverResult.data?.cache?.entries || 0) + ' 条, 闪卡: ' + (serverResult.data?.flashcards?.count || 0) + ' 条' : '❌ 连接失败: ' + serverResult.error }}
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 数据管理 ==================== -->
+      <section v-show="activeTab === 'data'" class="page">
+        <h2>📊 数据管理</h2>
+
+        <div class="card">
+          <h3>📋 翻译历史 <span class="count-badge">{{ history.length }}</span></h3>
+          <div class="input-row">
+            <input v-model="historyQuery" placeholder="搜索原文或译文..." @input="searchHistory" class="input" style="flex:1">
+            <button class="btn btn-secondary" @click="clearHistory" :disabled="history.length === 0">🗑 清空</button>
+          </div>
+          <table class="data-table" v-if="filteredHistory.length">
+            <thead><tr><th>原文</th><th>译文</th><th>引擎</th><th>时间</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="h in filteredHistory" :key="h.id">
+                <td class="ellipsis" :title="h.original">{{ h.original.slice(0, 60) }}{{ h.original.length > 60 ? '...' : '' }}</td>
+                <td class="ellipsis" :title="h.translation">{{ h.translation.slice(0, 60) }}{{ h.translation.length > 60 ? '...' : '' }}</td>
+                <td><span class="tag">{{ h.engineId }}</span></td>
+                <td class="nowrap">{{ formatDate(h.timestamp) }}</td>
+                <td><button class="btn-sm btn-danger" @click="deleteHistory(h.id)">删</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="empty-hint">暂无翻译记录 · 划词翻译成功后自动保存</div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>⭐ 生词闪卡 <span class="count-badge">{{ flashcards.length }}</span></h3>
+          <button class="btn btn-primary" @click="exportCSV" :disabled="flashcards.length === 0" style="margin-bottom:12px">📥 导出 CSV (Excel 兼容)</button>
+          <div class="flashcard-grid" v-if="flashcards.length">
+            <div v-for="card in flashcards" :key="card.id" class="flashcard-item">
+              <div class="fc-body">
+                <span class="fc-original">{{ card.original }}</span>
+                <span class="fc-arrow">→</span>
+                <span class="fc-translation">{{ card.translation }}</span>
+              </div>
+              <div class="fc-meta">
+                <span :class="['sync-dot', card.synced ? 'synced' : 'pending']"></span>
+                <span>{{ card.synced ? '已同步' : '离线' }}</span>
+                <span class="fc-date">{{ formatDate(card.createdAt) }}</span>
+                <button class="btn-sm btn-danger" @click="deleteFlashcard(card.id)">删</button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-hint">暂无生词 · 选中文本后按 Alt+A 收藏</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
