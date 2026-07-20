@@ -574,90 +574,93 @@
   // ==================== 整页翻译 ====================
 
   async function translateFullPage() {
-    if (state.fullPageActive) return;
+    if (state.fullPageActive) {
+      showToast('⚠ 页面已处于双语模式，请先点"还原原文"');
+      return;
+    }
+
+    console.log('[SmartTranslate] Full page translate starting...');
     state.fullPageActive = true;
 
-    // 提取所有段落文本节点
-    const paragraphs = [];
-    const textNodes = [];
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode: (node) => {
-          // 跳过特殊元素
-          const parent = node.parentElement;
-          const tag = parent?.tagName?.toLowerCase();
-          if (['script', 'style', 'pre', 'code', 'svg', 'noscript'].includes(tag)) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          // 跳过已有译文节点
-          if (parent?.classList?.contains('zt-trans')) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          // 跳过空白
-          if (!node.textContent.trim()) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      }
-    );
+    // 智能提取：只选主要内容区域，排除导航/页脚/侧边栏
+    const MAIN_SELECTORS = 'main, article, [role="main"], .content, .post, .article, .entry, #content, #main';
+    let container = document.querySelector(MAIN_SELECTORS);
+    if (!container) container = document.body;
 
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      const text = node.textContent.trim();
-      if (text.length > 10) { // 只翻译有意义的段落
-        textNodes.push(node);
+    const textNodes = [];
+    const paragraphs = [];
+    const seen = new Set();
+
+    // 找块级元素中的文本，跳过隐藏/导航/页脚
+    const blockElements = container.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dt, dd, figcaption, .paragraph, .text-block');
+    for (const el of blockElements) {
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (el.closest('nav, footer, .nav, .navbar, .menu, .sidebar, .footer, .header, [role="navigation"]')) continue;
+      if (el.classList.contains('zt-trans')) continue;
+
+      const text = el.textContent.trim();
+      if (text.length >= 3 && !seen.has(text)) {
+        seen.add(text);
+        textNodes.push(el);
         paragraphs.push(text);
       }
     }
 
+    console.log('[SmartTranslate] Found', paragraphs.length, 'blocks');
+
     if (paragraphs.length === 0) {
-      showToast('未找到可翻译的文本');
+      showToast('⚠ 未找到可翻译的段落（可能是动态加载页面）');
       state.fullPageActive = false;
       return;
     }
 
-    showToast(`正在翻译 ${paragraphs.length} 个段落...`);
+    showToast(`⏳ 翻译中 (${paragraphs.length} 段)...`);
 
-    try {
-      const resp = await chrome.runtime.sendMessage({
-        action: 'translatePage',
-        texts: paragraphs,
-        sourceLang: 'auto',
-        targetLang: state.targetLang
-      });
+    // 分批发送，每批 8 段
+    const BATCH = 8;
+    let allResults = [];
+    let failed = 0;
 
-      if (!resp.success) throw new Error(resp.error);
-
-      // 注入译文
-      for (let i = 0; i < textNodes.length; i++) {
-        const node = textNodes[i];
-        const translation = resp.data[i];
-        if (translation && !translation.error && translation.text) {
-          const transP = document.createElement('p');
-          transP.className = 'zt-trans';
-          transP.style.cssText = 'color:#666;border-left:3px solid #4a9eff;padding-left:12px;margin:4px 0 8px 0;font-size:0.95em;line-height:1.6;';
-          transP.textContent = translation.text;
-
-          const parent = node.parentElement;
-          // 找到包含此文本节点的块级祖先
-          let insertAfter = parent;
-          while (insertAfter && insertAfter.tagName !== 'P' && insertAfter.tagName !== 'DIV' && insertAfter.tagName !== 'LI' && insertAfter.tagName !== 'TD' && insertAfter !== document.body) {
-            insertAfter = insertAfter.parentElement;
-          }
-          if (insertAfter && insertAfter !== document.body) {
-            insertAfter.after(transP);
-          }
+    for (let i = 0; i < paragraphs.length; i += BATCH) {
+      const batch = paragraphs.slice(i, i + BATCH);
+      try {
+        const resp = await chrome.runtime.sendMessage({
+          action: 'translatePage',
+          texts: batch,
+          sourceLang: 'auto',
+          targetLang: state.targetLang
+        });
+        if (resp.success && resp.data) {
+          allResults.push(...resp.data);
+        } else {
+          failed += batch.length;
+          allResults.push(...batch.map(() => ({ error: resp.error || 'unknown' })));
         }
+      } catch (e) {
+        console.error('[SmartTranslate] Batch', i, 'fail:', e);
+        failed += batch.length;
+        allResults.push(...batch.map(() => ({ error: e.message })));
       }
-
-      showToast(`✅ 翻译完成 (${paragraphs.length} 段)`);
-    } catch (e) {
-      showToast('❌ 整页翻译失败: ' + e.message);
-      state.fullPageActive = false;
     }
+
+    // 注入译文
+    let injected = 0;
+    for (let i = 0; i < textNodes.length; i++) {
+      const el = textNodes[i];
+      const result = allResults[i];
+      if (result && !result.error && result.text) {
+        const transP = document.createElement('p');
+        transP.className = 'zt-trans';
+        transP.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:6px 12px;margin:2px 0 8px 0;font-size:0.9em;line-height:1.7;';
+        transP.textContent = result.text;
+        el.insertAdjacentElement('afterend', transP);
+        injected++;
+      }
+    }
+
+    showToast(`✅ 翻译完成 (${injected}/${paragraphs.length} 段${failed ? ', ' + failed + ' 失败' : ''})`);
+    console.log('[SmartTranslate] Done:', injected, 'injected,', failed, 'failed');
   }
 
   /**
