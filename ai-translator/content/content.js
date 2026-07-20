@@ -151,12 +151,11 @@
   }
 
   function onKeyDown(e) {
-    // Escape 关闭
+    // Escape 关闭所有翻译 UI
     if (e.key === 'Escape') {
-      if (currentCard || currentIcon) {
-        removeCard();
-        removeIcon();
-      }
+      removeCard();
+      removeIcon();
+      removeInlineOnly();
     }
     // Alt+A 闪卡
     if (e.altKey && (e.key === 'a' || e.key === 'A') && state.altAEnabled && selectedText) {
@@ -176,40 +175,50 @@
     const shadow = host.attachShadow({ mode: 'closed' });
     shadow.innerHTML = `
       <style>
-        .zt-icon {
-          width: 28px; height: 28px;
-          background: #4a9eff;
-          border-radius: 50%;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-          transition: transform 0.15s, box-shadow 0.15s;
-          user-select: none;
+        .zt-icon-bar {
+          display: flex; align-items: center; gap: 6px;
+          background: var(--bg, #1e1e2e); border: 1px solid var(--border, #3a3a50);
+          border-radius: 20px; padding: 4px 6px 4px 10px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+          user-select: none; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;
         }
-        .zt-icon:hover {
-          transform: scale(1.15);
-          box-shadow: 0 4px 16px rgba(74,158,255,0.5);
+        .zt-icon-btn {
+          width: 26px; height: 26px; background: #4a9eff; border-radius: 50%;
+          cursor: pointer; display: flex; align-items: center; justify-content: center;
+          transition: transform 0.15s; border: none; padding: 0;
         }
-        .zt-icon svg { width: 16px; height: 16px; fill: #fff; }
+        .zt-icon-btn:hover { transform: scale(1.12); }
+        .zt-icon-btn svg { width: 14px; height: 14px; fill: #fff; }
+        .zt-close-btn {
+          width: 24px; height: 24px; background: transparent; border: none;
+          color: #888; cursor: pointer; border-radius: 50%; display: flex;
+          align-items: center; justify-content: center; font-size: 14px;
+          transition: all 0.15s; padding: 0; line-height: 1;
+        }
+        .zt-close-btn:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
       </style>
-      <div class="zt-icon" title="翻译选中文本">
-        <svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+      <div class="zt-icon-bar" title="翻译选中文本">
+        <button class="zt-icon-btn">
+          <svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+        </button>
+        <button class="zt-close-btn" title="关闭">✕</button>
       </div>
     `;
 
-    shadow.querySelector('.zt-icon').addEventListener('click', (e) => {
+    shadow.querySelector('.zt-icon-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       showCard();
       removeIcon();
     });
+    shadow.querySelector('.zt-close-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeIcon();
+      removeInlineOnly();
+    });
 
     currentIcon = host;
     updateIconPosition();
-
-    // 全局点击关闭
-    setTimeout(() => document.addEventListener('click', onGlobalClick, { once: true }), 0);
+    // 不再全局点击关闭 — 用户显式点 X 或 Escape 才关闭
   }
 
   function updateIconPosition() {
@@ -289,6 +298,13 @@
         .error .retry { color: var(--accent); cursor: pointer; margin-top: 8px; }
         .src-lang { background: var(--surface); padding: 2px 8px; border-radius: 4px; }
         .style-badge { background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+        .card-close-btn {
+          margin-left: auto; width: 24px; height: 24px; background: transparent; border: none;
+          color: #888; cursor: pointer; border-radius: 50%; display: flex;
+          align-items: center; justify-content: center; font-size: 14px;
+          transition: all 0.15s; padding: 0; line-height: 1; flex-shrink: 0;
+        }
+        .card-close-btn:hover { background: rgba(255,255,255,0.1); color: #ff6b6b; }
         .toast {
           position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
           background: #333; color: #fff; padding: 10px 24px; border-radius: 8px;
@@ -302,6 +318,7 @@
           <span class="src-lang">检测中...</span>
           <span>→ ${state.targetLang}</span>
           <span class="style-badge">${state.style === 'explain' ? '释义' : '直译'}</span>
+          <button class="card-close-btn" title="关闭 (Esc)">✕</button>
         </div>
         <div class="card-body"><div class="loading"></div></div>
         <div class="card-footer" style="display:none;">
@@ -318,7 +335,9 @@
     // 绑定按钮
     const cardEl = shadow.querySelector('.card');
     cardEl.addEventListener('click', (e) => e.stopPropagation());
-    shadow.querySelector('.btn-close').addEventListener('click', () => { removeCard(); });
+    const closeFn = () => { removeCard(); };
+    shadow.querySelector('.btn-close').addEventListener('click', closeFn);
+    shadow.querySelector('.card-close-btn').addEventListener('click', closeFn);
     shadow.querySelector('.btn-copy').addEventListener('click', () => copyTranslation(shadow));
     shadow.querySelector('.btn-flashcard').addEventListener('click', () => createFlashcard(shadow));
 
@@ -326,9 +345,7 @@
 
     // 发起翻译请求
     doTranslate(shadow);
-
-    // 全局点击关闭
-    setTimeout(() => document.addEventListener('click', onGlobalClick, { once: true }), 0);
+    // 不再全局点击关闭 — 显式点 ✕ 或按 Escape 才关闭
   }
 
   function updateCardPosition(host) {
@@ -421,16 +438,9 @@
     }
   }
 
-  function onGlobalClick(e) {
-    const clickedOnIcon = currentIcon && e.target.closest('#zt-icon-host');
-    const clickedOnCard = currentCard && e.target.closest('#zt-card-host');
-    if (!clickedOnIcon && !clickedOnCard) {
-      removeCard();
-      removeIcon();
-    } else {
-      // 继续监听下次全局点击
-      setTimeout(() => document.addEventListener('click', onGlobalClick, { once: true }), 0);
-    }
+  /** 仅移除划词内联翻译，不影响整页翻译 */
+  function removeInlineOnly() {
+    document.querySelectorAll('.zt-inline-trans[data-selector="true"]').forEach(el => el.remove());
   }
 
   // ==================== 右键菜单 / 快捷键触发 ====================
