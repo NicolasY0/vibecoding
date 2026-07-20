@@ -31,7 +31,11 @@
   chrome.runtime.onMessage.addListener(handleMessage);
 
   // ========== 划词翻译 ==========
+  let _lastMouseUp = 0;
   function onMouseUp(e) {
+    const now = Date.now();
+    if (now - _lastMouseUp < 200) return; // 防止双击/重复触发
+    _lastMouseUp = now;
     setTimeout(() => {
       try {
         if (!settings.selectionEnabled) return;
@@ -111,6 +115,7 @@
 
   // ========== 翻译卡片 ==========
   function showCard() {
+    if (cardEl) return; // 已有卡片，不重复创建
     dismissIcon();
     cardEl = document.createElement('div');
     cardEl.id = 'zt-card';
@@ -203,16 +208,18 @@
     const existing = document.querySelectorAll('.zt-trans-page');
     if (existing.length > 0) { toast('⚠ 已翻译，请先还原'); return; }
 
-    // 找主要内容区的块级文本
+    // 找主要内容区的块级文本（只取叶子节点，排除包含其他匹配元素的父节点）
     const container = document.querySelector('main, article, [role="main"], .content, #content, #main') || document.body;
-    const blocks = [];
-    const elements = container.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dt, dd, figcaption');
+    const TAG_SEL = 'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, dt, dd, figcaption';
+    const allElements = container.querySelectorAll(TAG_SEL);
     const seen = new Set();
+    const blocks = [];
 
-    for (const el of elements) {
-      if (el.closest('nav, footer, .nav, .navbar, .menu, .sidebar, .footer, .header, [role="navigation"], script, style')) continue;
+    for (const el of allElements) {
+      if (el.closest('nav, footer, .nav, .navbar, .menu, .sidebar, .footer, .header, [role="navigation"], script, style, .zt-trans-page')) continue;
       if (getComputedStyle(el).display === 'none') continue;
-      if (el.classList.contains('zt-trans-page')) continue;
+      // 排除包含其他匹配元素的父节点（只取叶子块级元素，避免嵌套重复）
+      if (el.querySelector(TAG_SEL)) continue;
       const t = el.textContent.trim();
       if (t.length >= 3 && !seen.has(t)) { seen.add(t); blocks.push(el); }
     }
