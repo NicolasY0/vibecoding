@@ -16,8 +16,7 @@
   let highlightEls = [];  // inline 模式下的原文高亮
   let settings = {
     targetLang: 'zh-CN', style: 'explain', selectionEnabled: true,
-    altAEnabled: true, activeEngineId: 'microsoft',
-    translateMode: 'card' // 'card' | 'inline'
+    altAEnabled: true, activeEngineId: 'microsoft'
   };
 
   // ========== 初始化 ==========
@@ -82,7 +81,7 @@
     return false;
   }
 
-  // ========== 图标 ==========
+  // ========== 图标（双模式） ==========
   function showIcon() {
     dismissAll();
     iconEl = document.createElement('div');
@@ -90,17 +89,40 @@
     iconEl.innerHTML = `
       <style>
         #zt-icon{position:fixed;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
-        .zt-bar{display:flex;align-items:center;gap:6px;background:#1e1e2e;border:1px solid #4a9eff;border-radius:22px;padding:5px 8px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
-        .zt-tr-btn{width:30px;height:30px;background:#4a9eff;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff;padding:0}
-        .zt-tr-btn:hover{background:#3a8eef}
-        .zt-cls-btn{background:none;border:none;color:#888;cursor:pointer;font-size:18px;padding:0 4px;line-height:1}
-        .zt-cls-btn:hover{color:#ff6b6b}
+        .zt-bar{display:flex;align-items:center;gap:4px;background:#1e1e2e;border:1px solid #3a3a50;border-radius:24px;padding:4px 6px;box-shadow:0 4px 20px rgba(0,0,0,0.5);user-select:none}
+        .zt-btn{height:32px;border:none;border-radius:20px;cursor:pointer;display:flex;align-items:center;gap:5px;padding:0 12px;font-size:13px;color:#ccc;background:transparent;transition:all 0.15s;white-space:nowrap;font-family:inherit}
+        .zt-btn:hover{background:#2a2a3e;color:#fff}
+        .zt-btn.active{background:#4a9eff;color:#fff}
+        .zt-btn svg{width:16px;height:16px;fill:currentColor;flex-shrink:0}
+        .zt-sep{width:1px;height:20px;background:#3a3a50;margin:0 2px}
+        .zt-cls-btn{width:28px;height:28px;background:transparent;border:none;border-radius:50%;color:#666;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;flex-shrink:0}
+        .zt-cls-btn:hover{background:#3a1a1a;color:#ff6b6b}
       </style>
       <div class="zt-bar">
-        <button class="zt-tr-btn" title="翻译">🌐</button>
+        <button class="zt-btn active" data-mode="card" title="弹窗卡片模式">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" stroke-width="2"/></svg>
+          弹窗
+        </button>
+        <button class="zt-btn" data-mode="inline" title="内联高亮模式">
+          <svg viewBox="0 0 24 24"><path d="M3 4h18v2H3V4zm0 7h12v2H3v-2zm0 7h18v2H3v-2z" fill="currentColor"/></svg>
+          内联
+        </button>
+        <span class="zt-sep"></span>
         <button class="zt-cls-btn" title="关闭">✕</button>
       </div>`;
-    iconEl.querySelector('.zt-tr-btn').onclick = (e) => { e.stopPropagation(); showCard(); };
+    // 模式按钮点击
+    iconEl.querySelectorAll('.zt-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        iconEl.querySelectorAll('.zt-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (btn.dataset.mode === 'inline') {
+          showInline();
+        } else {
+          showCardPopup();
+        }
+      };
+    });
     iconEl.querySelector('.zt-cls-btn').onclick = (e) => { e.stopPropagation(); dismissAll(); };
     document.body.appendChild(iconEl);
     positionIcon();
@@ -117,15 +139,6 @@
   }
 
   // ========== 翻译卡片 / 内联模式 ==========
-  function showCard() {
-    if (cardEl || inlineEl) return;
-    dismissIcon();
-    if (settings.translateMode === 'inline') {
-      showInline();
-    } else {
-      showCardPopup();
-    }
-  }
 
   function showCardPopup() {
     if (cardEl) return;

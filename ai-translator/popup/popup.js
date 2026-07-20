@@ -12,7 +12,6 @@ async function load() {
     });
     document.getElementById('styleSelect').value = settings.style || 'explain';
     document.getElementById('langSelect').value = settings.targetLang || 'zh-CN';
-    document.getElementById('modeSelect').value = settings.translateMode || 'card';
     loadHistory();
   } catch (e) { document.getElementById('status').textContent = '错误'; }
 }
@@ -40,9 +39,6 @@ document.getElementById('styleSelect').onchange = async (e) => {
 };
 document.getElementById('langSelect').onchange = async (e) => {
   await chrome.runtime.sendMessage({ action: 'setTargetLang', lang: e.target.value });
-};
-document.getElementById('modeSelect').onchange = async (e) => {
-  await chrome.runtime.sendMessage({ action: 'setTranslateMode', mode: e.target.value });
 };
 document.getElementById('translatePageBtn').onclick = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
