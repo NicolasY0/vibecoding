@@ -167,6 +167,6 @@ app.get('/v1/flashcards/export/csv', authMiddleware, (req, res) => {
 
 const PORT = process.env.PORT || 3456;
 app.listen(PORT, () => {
-  console.log(`[AI Translator Server] Running on http://localhost:${PORT}`);
-  console.log(`[AI Translator Server] Health: http://localhost:${PORT}/v1/health`);
+  console.log(`[SmartTranslate Server] Running on http://localhost:${PORT}`);
+  console.log(`[SmartTranslate Server] Health: http://localhost:${PORT}/v1/health`);
 });

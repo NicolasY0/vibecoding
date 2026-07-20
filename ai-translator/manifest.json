@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Translator",
+  "name": "SmartTranslate",
   "version": "1.0.0",
-  "description": "AI 网页翻译插件 — 划词翻译 / 整页双语 / 生词闪卡 / 多引擎 + Cookie·Session·Token 认证",
+  "description": "AI 网页翻译插件 — 划词翻译 · 整页双语 · 生词闪卡 · Cookie/Session/Token 认证",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -31,7 +31,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "AI Translator",
+    "default_title": "SmartTranslate",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

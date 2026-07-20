@@ -1,7 +1,7 @@
 {
-  "name": "ai-translator-server",
+  "name": "smarttranslate-server",
   "version": "1.0.0",
-  "description": "AI Translator 自建服务器 — 翻译缓存 + 闪卡存储",
+  "description": "SmartTranslate 自建服务器 — 翻译缓存 + 闪卡存储",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

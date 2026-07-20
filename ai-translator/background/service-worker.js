@@ -54,9 +54,9 @@ async function init() {
   // 配置翻译引擎
   await translator.configure(settings.engines);
 
-  console.log('[AI Translator] Background service worker initialized');
-  console.log('[AI Translator] Engines:', settings.engines.filter(e => e.enabled).map(e => e.id));
-  console.log('[AI Translator] Active:', settings.activeEngineId, '| Style:', settings.style);
+  console.log('[SmartTranslate] Background service worker initialized');
+  console.log('[SmartTranslate] Engines:', settings.engines.filter(e => e.enabled).map(e => e.id));
+  console.log('[SmartTranslate] Active:', settings.activeEngineId, '| Style:', settings.style);
 }
 
 async function reloadSettings() {

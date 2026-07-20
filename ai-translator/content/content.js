@@ -28,7 +28,7 @@
   // ==================== 初始化 ====================
 
   async function init() {
-    console.log('[AI Translator] Content script starting on:', location.hostname);
+    console.log('[SmartTranslate] Content script starting on:', location.hostname);
 
     // SPA 延迟初始化 — 等待页面动态内容渲染完成
     await new Promise(r => setTimeout(r, 500));
@@ -42,7 +42,7 @@
     // 初始化选区监听
     if (state.selectionEnabled) {
       document.addEventListener('mouseup', onMouseUp, { passive: true });
-      console.log('[AI Translator] Selection listener active');
+      console.log('[SmartTranslate] Selection listener active');
     }
 
     // 键盘快捷键
@@ -59,7 +59,7 @@
       getSelection: () => selectedText
     };
 
-    console.log('[AI Translator] Content script ready ✅');
+    console.log('[SmartTranslate] Content script ready ✅');
   }
 
   async function loadSettings() {
@@ -82,7 +82,7 @@
         }
       }
     } catch (e) {
-      console.warn('[AI Translator] Failed to load settings:', e.message);
+      console.warn('[SmartTranslate] Failed to load settings:', e.message);
     }
   }
 
@@ -385,6 +385,9 @@
       bodyEl.innerHTML = `<div class="translation-text">${escapeHtml(t.text)}</div>`;
       footerEl.style.display = 'flex';
 
+      // 内联翻译：在原文所在段落下方插入译文
+      injectInlineTranslation(t.text, t.engineId);
+
       // REQ-SEL-011: 写入翻译历史
       chrome.runtime.sendMessage({
         action: 'saveHistory',
@@ -647,9 +650,54 @@
     }
   }
 
+  /**
+   * 内联翻译：在选中文本所在的块级元素下方插入译文
+   * 样式与整页翻译一致（蓝色左边框 + 灰色文字）
+   */
+  function injectInlineTranslation(translationText, engineId) {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+
+    try {
+      const range = selection.getRangeAt(0);
+      // 向上查找块级父元素
+      let parent = range.commonAncestorContainer;
+      while (parent && parent.nodeType !== 1) parent = parent.parentElement;
+      if (!parent || parent === document.body || parent === document.documentElement) return;
+
+      // 找最近的块级祖先（p, div, li, td, h1-h6 等）
+      let block = parent;
+      const blockTags = new Set(['P', 'DIV', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE', 'SECTION', 'ARTICLE']);
+      while (block && !blockTags.has(block.tagName) && block !== document.body) {
+        block = block.parentElement;
+      }
+      if (!block || block === document.body) {
+        // fallback: 直接插在 parent 后面
+        block = parent;
+      }
+
+      // 移除同一选区的旧译文
+      const existing = block.parentElement?.querySelector('.zt-inline-trans[data-selector="true"]');
+      if (existing) existing.remove();
+
+      // 创建译文元素
+      const transEl = document.createElement('div');
+      transEl.className = 'zt-trans zt-inline-trans';
+      transEl.setAttribute('data-selector', 'true');
+      transEl.style.cssText = 'color:#888;border-left:3px solid #4a9eff;padding:6px 12px;margin:4px 0 10px 0;font-size:0.95em;line-height:1.7;background:rgba(74,158,255,0.04);border-radius:0 4px 4px 0;';
+      transEl.textContent = translationText;
+
+      // 插入到块元素后面
+      block.insertAdjacentElement('afterend', transEl);
+    } catch (e) {
+      // 静默失败，内联翻译只是辅助功能
+      console.warn('[Inline Translation] Failed:', e.message);
+    }
+  }
+
   function restoreFullPage() {
-    const transElements = document.querySelectorAll('.zt-trans');
-    transElements.forEach(el => el.remove());
+    // 移除整页翻译 (.zt-trans) 和划词内联翻译 (.zt-inline-trans)
+    document.querySelectorAll('.zt-trans').forEach(el => el.remove());
     state.fullPageActive = false;
     showToast('✅ 已还原原文');
   }
