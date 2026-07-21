@@ -79,13 +79,3 @@ const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9223' })
 ```
 需要先启动 Chrome：`chrome.exe --remote-debugging-port=9223`
 
-### 已安装的 Skills
-
-| Skill | 用途 |
-|-------|------|
-| `bilibili-dynamic-deleter` | B 站动态批量删除 |
-| `image-analysis` | 图片分析 OCR（智谱 GLM-4V） |
-| `find-skills` | 搜索更多 skills |
-| `skill-creator` | 创建/改进 skills |
-| `agent-browser` | 浏览器自动化（Windows 不稳定） |
-| `ui-ux-pro-max` | UI/UX 设计数据库 |
