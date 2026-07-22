@@ -9,36 +9,44 @@ Automates Codex CLI login from restricted networks (e.g. mainland China).
 - Guides you through enabling device code authorization
 - Runs `codex login --device-auth` and helps you enter the verification code
 
+## Two Versions
+
+| File | Mode | How it works |
+|------|------|-------------|
+| `SKILL.md` | **Manual** (recommended) | CLI handles proxy + code generation; you do browser steps manually |
+| `SKILL_AUTO.md` | **Auto** (experimental) | `browser-use` automates everything including browser clicks via CDP |
+
+**Use the Manual version** unless you have Chrome remote debugging set up and
+are comfortable with CDP. The auto version is less reliable due to 400 errors,
+CDP timeouts, and fragile button matching.
+
 ## Quick Start
 
-1. Install the skill into Claude Code's `.claude/skills/codex-login/`
+1. Copy the desired `SKILL.md` into `.claude/skills/codex-login/`
 2. Make sure your VPN/proxy is running
-3. Say: **"帮我登录 codex"** (or "log into codex")
-
-The skill will auto-detect your proxy, check if you're logged in, and walk you through the rest.
+3. Say: **"help me log into codex"** or **"帮我登录 codex"**
 
 ## Requirements
 
-- [Codex CLI](https://www.npmjs.com/package/@openai/codex) installed (`npm install -g @openai/codex`)
-- A working VPN/proxy to reach OpenAI (Clash, V2Ray, etc.)
-- A ChatGPT account (Plus or Free)
+- [Codex CLI](https://www.npmjs.com/package/@openai/codex) installed
+- A working VPN/proxy (Clash, V2Ray, etc.)
+- A ChatGPT account
 - A browser logged into ChatGPT
 
-## Manual vs Auto
-
-This is the **manual version**. The skill handles proxy detection and the CLI side; you handle the browser steps manually. This is the most reliable approach.
-
-The browser steps are:
-1. Open `https://chatgpt.com/codex/settings/general#settings/Security` and turn ON "Enable device code authentication for Codex"
-2. Open `https://auth.openai.com/codex/device` and enter the code shown in your terminal
-
-## Why this exists
-
-OpenAI blocks connections from mainland China. The Codex CLI login flow also requires a hidden setting ("device code authorization") that many users can't find. This skill automates the hard parts.
+**Auto version additionally requires:**
+- Chrome with remote debugging enabled
+- `browser-use` installed (`pip install browser-use`)
+- Python < 3.14 (3.14 has Unicode surrogate bug on Windows)
 
 ## Install
 
-Copy `SKILL.md` into `.claude/skills/codex-login/` in your project.
+```bash
+# Manual version (recommended)
+cp SKILL.md ~/your-project/.claude/skills/codex-login/
+
+# Or auto version
+cp SKILL_AUTO.md ~/your-project/.claude/skills/codex-login/SKILL.md
+```
 
 ## License
 
